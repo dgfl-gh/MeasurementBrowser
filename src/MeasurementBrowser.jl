@@ -1,13 +1,5 @@
 module MeasurementBrowser
 
-using Bonito
-using WGLMakie
-using DataFrames
-using Dates
-using JSON3
-using Statistics
-using Observables
-
 # Core modules
 include("DeviceParser.jl")
 include("MeasurementData.jl")
