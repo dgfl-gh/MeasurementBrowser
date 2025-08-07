@@ -2,7 +2,7 @@
 PlotGenerator.jl - Generate plots and thumbnails for measurements
 """
 
-using WGLMakie
+using GLMakie
 using DataFrames
 using Statistics
 using CSV

@@ -4,9 +4,10 @@ module MeasurementBrowser
 include("DeviceParser.jl")
 include("MeasurementData.jl")
 include("PlotGenerator.jl")
-include("BonitoInterface.jl")
+include("Gui.jl")
 
 # Re-export main functions
-export start_browser, create_app, scan_directory, DeviceHierarchy
+export start_browser, scan_directory, DeviceHierarchy
+export MeasurementInfo, DeviceInfo
 
 end # module MeasurementBrowser

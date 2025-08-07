@@ -16,7 +16,7 @@ end
 """
 Scan directory recursively for measurement files with enhanced analysis
 """
-function scan_directory(root_path::String)
+function scan_directory(root_path::String)::DeviceHierarchy
     measurements = MeasurementInfo[]
     
     # Walk through all subdirectories
