@@ -170,9 +170,9 @@ function parse_parameters(filename::String)
         unit = m.captures[2]
         params["frequency_hz"] = unit == "khz" ? val * 1e3 : val
     end
-    # Sequence number (e.g., (3))
+    # Count number (e.g., (3))
     if (m = match(r"\((\d+)\)", filename)) !== nothing
-        params["sequence"] = parse(Int, m.captures[1])
+        params["count"] = parse(Int, m.captures[1])
     end
     return params
 end

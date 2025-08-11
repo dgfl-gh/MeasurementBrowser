@@ -100,8 +100,70 @@ end
 
 function render_info_window(ui_state)
     if ig.Begin("Information Panel")
-        ig.Text("Information")
-        # TODO: show info
+        ig.Columns(2, "info_cols")
+        # ---- Column 1: Device stats ----
+        if haskey(ui_state, :selected_measurements)
+            meas_vec = ui_state[:selected_measurements]
+            sel_name = join(get(ui_state, :selected_path, [""]), "/")
+            ig.Text("Device: " * sel_name)
+            stats = try
+                get_device_stats(meas_vec)
+            catch err
+                @warn "Failed to compute stats" error=err
+                Dict{String,Any}()
+            end
+            ig.Separator()
+            if !isempty(stats)
+                ig.Text("Stats")
+                ig.BulletText("Total: $(stats["total_measurements"])\n")
+                ig.BulletText("Types: $(join(stats["measurement_types"], ", "))")
+                if haskey(stats, "first_measurement")
+                    ig.BulletText("First: $(stats["first_measurement"]) ")
+                    ig.BulletText("Last:  $(stats["last_measurement"]) ")
+                    ig.BulletText("Duration: $(stats["duration"]) ")
+                end
+                if haskey(stats, "parameter_ranges") && !isempty(stats["parameter_ranges"])
+                    ig.Separator()
+                    ig.Text("Parameter ranges")
+                    for (p,(mn,mx)) in stats["parameter_ranges"]
+                        ig.BulletText("$(p): $(mn) – $(mx)")
+                    end
+                end
+            else
+                ig.Text("No stats available")
+            end
+        else
+            ig.Text("Select a device to see details")
+        end
+
+        ig.NextColumn()
+        # ---- Column 2: Measurement details ----
+        if haskey(ui_state, :selected_measurement)
+            m = ui_state[:selected_measurement]
+            ig.Text("Selected Measurement")
+            ig.Separator()
+            ig.BulletText("Title: $(m.clean_title)")
+            ig.BulletText("Type: $(m.measurement_type)")
+            ig.BulletText("Timestamp: $(m.timestamp)")
+            ig.BulletText("Filename: $(m.filename)")
+            ig.BulletText("Path: $(m.filepath)")
+            di = m.device_info
+            ig.Separator()
+            ig.Text("Device Info")
+            ig.BulletText("Chip: $(di.chip)")
+            ig.BulletText("Subsite: $(di.subsite)")
+            ig.BulletText("Device: $(di.device)")
+            ig.BulletText("Full Path: $(di.full_path)")
+            if !isempty(m.parameters)
+                ig.Separator()
+                ig.Text("Parameters")
+                for (k,v) in m.parameters
+                    ig.BulletText("$(k) = $(v)")
+                end
+            end
+        else
+            ig.Text("Select a measurement to view details")
+        end
     end
     ig.End()
 end
