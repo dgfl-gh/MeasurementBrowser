@@ -7,129 +7,141 @@ using Dates
 
 # DeviceParser types and functions are already included in main module
 
-struct DeviceHierarchy
-    chips::Dict{String, Dict{String, Dict{String, Vector{MeasurementInfo}}}}
+# Generic hierarchical data structure ---------------------------------------
+struct HierarchyNode
+    name::String
+    kind::Symbol
+    children::Vector{HierarchyNode}
+    measurements::Vector{MeasurementInfo}
+end
+
+HierarchyNode(name::String, kind::Symbol) = HierarchyNode(name, kind, HierarchyNode[], MeasurementInfo[])
+
+struct MeasurementHierarchy
+    root::HierarchyNode
     all_measurements::Vector{MeasurementInfo}
     root_path::String
+    index::Dict{Tuple{Vararg{String}}, HierarchyNode}
 end
 
-# Remove separate natural_device_key / roman_value / subsite_key helpers and encapsulate logic in Base.sort
+# ---------------------------------------------------------------------------
+# Sorting helpers (generic, reusable)
+# ---------------------------------------------------------------------------
+function roman_value(s::AbstractString)
+    ROMAN_MAP = Dict('I'=>1,'V'=>5,'X'=>10,'L'=>50)
+    isempty(s) && return nothing
+    total = 0; prev = 0
+    for c in reverse(uppercase(s))
+        v = get(ROMAN_MAP, c, 0); v == 0 && return nothing
+        if v < prev; total -= v else total += v; prev = v end
+    end
+    return total
+end
 
-function Base.sort(dh::DeviceHierarchy)
-    # Local helpers (kept private to this method)
-    device_key(s::AbstractString) = begin
-        if (m = match(r"^([A-Za-z]+)(\d+)$", String(s))) !== nothing
-            return (m.captures[1], parse(Int, m.captures[2]))
+# Natural alphanumeric split key
+function natural_key(s::AbstractString)
+    toks = eachmatch(r"\d+|\D+", String(s))
+    parts = Any[]
+    for t in toks
+        seg = t.match
+        if all(isdigit, seg)
+            push!(parts, (1, parse(Int, seg)))
         else
-            return (String(s), 0)
+            push!(parts, (0, lowercase(seg)))
         end
     end
-    roman_value(s::AbstractString) = begin
-        isempty(s) && return nothing
-        # Simple limited roman numerals (I,V,X) sufficient for current subsites
-        vals = Dict('I'=>1,'V'=>5,'X'=>10)
-        total = 0; prev = 0
-        for c in reverse(s)
-            v = get(vals, c, 0); v == 0 && return nothing
-            if v < prev; total -= v else total += v; prev = v end
+    return Tuple(parts)
+end
+
+
+# sort! for a single node (recursive)
+function Base.sort!(node::HierarchyNode)
+    # Decide if a vector of nodes should use Roman sorting (all valid romans)
+    function _roman_sortable(children::Vector{HierarchyNode})
+        isempty(children) && return false
+        for ch in children
+            roman_value(ch.name) === nothing && return false
         end
-        total
-    end
-    subsite_key(s::AbstractString) = begin
-        v = roman_value(s)
-        v === nothing ? (1, String(s)) : (0, v)
+        return true
     end
 
-    new_chips = Dict{String, Dict{String, Dict{String, Vector{MeasurementInfo}}}}()
-    for chip_key in sort(collect(keys(dh.chips)))
-        subsites = dh.chips[chip_key]
-        new_subsites = Dict{String, Dict{String, Vector{MeasurementInfo}}}()
-        for subsite_key_name in sort(collect(keys(subsites)); by=subsite_key)
-            devices = subsites[subsite_key_name]
-            new_devices = Dict{String, Vector{MeasurementInfo}}()
-            for device_key_name in sort(collect(keys(devices)); by=device_key)
-                mvec = copy(devices[device_key_name])
-                sort!(mvec, by = m -> m.timestamp === nothing ? DateTime(typemax(Date).year) : m.timestamp)
-                new_devices[device_key_name] = mvec
-            end
-            new_subsites[subsite_key_name] = new_devices
-        end
-        new_chips[chip_key] = new_subsites
+    for ch in node.children
+        sort!(ch)
     end
-    DeviceHierarchy(new_chips, dh.all_measurements, dh.root_path)
+    if _roman_sortable(node.children)
+        sort!(node.children, by = c -> roman_value(c.name))
+    else
+        sort!(node.children, by = c -> natural_key(c.name))
+    end
+    # Sort measurements chronologically
+    for ch in node.children
+        sort!(ch.measurements, by = m -> m.timestamp === nothing ? DateTime(typemax(Date).year) : m.timestamp)
+    end
+    return node
 end
+
+# sort! for whole hierarchy
+function Base.sort!(mh::MeasurementHierarchy)
+    sort!(mh.root)
+    return mh
+end
+
+# ---------------------------------------------------------------------------
+# Constructor building unsorted tree then sorting via sort!
+# ---------------------------------------------------------------------------
+function MeasurementHierarchy(measurements::Vector{MeasurementInfo}, root_path::String)
+    root = HierarchyNode("/", :root)
+    index = Dict{Tuple{Vararg{String}}, HierarchyNode}()
+    function ensure_child(parent::HierarchyNode, name::String, kind::Symbol, path_tuple::Tuple{Vararg{String}})
+        for ch in parent.children
+            if ch.name == name
+                return ch
+            end
+        end
+        node = HierarchyNode(name, kind)
+        push!(parent.children, node)
+        index[path_tuple] = node
+        return node
+    end
+    for m in measurements
+        chip = m.device_info.chip
+        sub = m.device_info.subsite
+        dev = m.device_info.device
+        chip_node = ensure_child(root, chip, :level1, (chip,))
+        sub_node = ensure_child(chip_node, sub, :level2, (chip, sub))
+        dev_node = ensure_child(sub_node, dev, :leaf, (chip, sub, dev))
+        push!(dev_node.measurements, m)
+    end
+    mh = MeasurementHierarchy(root, measurements, root_path, index)
+    sort!(mh)
+    return mh
+end
+
+# Provide iteration utilities
+children(node::HierarchyNode) = node.children
+isleaf(node::HierarchyNode) = isempty(node.children)
 
 """
 Scan directory recursively for measurement files with enhanced analysis
 """
-function scan_directory(root_path::String)::DeviceHierarchy
+function scan_directory(root_path::String)::MeasurementHierarchy
     measurements = MeasurementInfo[]
-    
-    # Walk through all subdirectories
     for (root, dirs, files) in walkdir(root_path)
         for file in files
-            # Only process CSV files (measurement data)
             if endswith(lowercase(file), ".csv")
                 filepath = joinpath(root, file)
-                
-                # Use basic file info extraction for now
                 try
-                    relative_dir = relpath(root, root_path)
                     measurement_info = MeasurementInfo(filepath)
-                    # Expand potential multi-device breakdowns
                     for m in expand_multi_device(measurement_info)
                         push!(measurements, m)
                     end
                 catch e
                     @warn "Could not parse measurement file $filepath" error=e
-                    # Create a basic measurement info
-                    relative_dir = relpath(root, root_path)
-                    measurement_info = MeasurementInfo(
-                        file,
-                        filepath,
-                        "Unknown Measurement",
-                        "Unknown",
-                        nothing,
-                        DeviceInfo("Unknown", "Unknown", "Unknown", "N/A"),
-                        Dict{String, Any}()
-                    )
-                    push!(measurements, measurement_info)
                 end
             end
         end
     end
-    
-    # Build device hierarchy
-    hierarchy = build_device_hierarchy(measurements, root_path)
-    
-    return hierarchy
-end
-
-"""
-Build hierarchical device structure from measurements
-"""
-function build_device_hierarchy(measurements::Vector{MeasurementInfo}, root_path::String)
-    chips = Dict{String, Dict{String, Dict{String, Vector{MeasurementInfo}}}}()
-    
-    for measurement in measurements
-        chip = measurement.device_info.chip
-        subsite = measurement.device_info.subsite
-        device = measurement.device_info.device
-        
-        if !haskey(chips, chip)
-            chips[chip] = Dict{String, Dict{String, Vector{MeasurementInfo}}}()
-        end
-        if !haskey(chips[chip], subsite)
-            chips[chip][subsite] = Dict{String, Vector{MeasurementInfo}}()
-        end
-        if !haskey(chips[chip][subsite], device)
-            chips[chip][subsite][device] = MeasurementInfo[]
-        end
-        push!(chips[chip][subsite][device], measurement)
-    end
-
-    # Return sorted hierarchy copy
-    return sort(DeviceHierarchy(chips, measurements, root_path))
+    return MeasurementHierarchy(measurements, root_path)
 end
 
 """

@@ -15,7 +15,6 @@ function render_menu_bar(ui_state)
     if ig.BeginMenuBar()
         if ig.BeginMenu("File")
             if ig.MenuItem("Open Folder...")
-                # Prompt for folder selection via kdialog
                 path = try
                     String(readchomp(`kdialog --getexistingdirectory`))
                 catch
@@ -23,9 +22,8 @@ function render_menu_bar(ui_state)
                 end
                 if !isempty(path)
                     @info "Selected path: $path"
-                    # Scan and populate device hierarchy
                     hierarchy = scan_directory(path)
-                    ui_state[:devices] = hierarchy.chips
+                    ui_state[:hierarchy_root] = hierarchy.root
                     ui_state[:all_measurements] = hierarchy.all_measurements
                     ui_state[:root_path] = path
                 end
@@ -37,61 +35,54 @@ function render_menu_bar(ui_state)
 end
 
 function render_device_tree(ui_state)
-    # Recursive renderer for arbitrary nested Dict trees
-    function render_tree_node(name::String, node, ui_state, path=String[])
-        if node isa Dict
-            if ig.TreeNode(name)
-                for (child_name, child_node) in node
-                    render_tree_node(child_name, child_node, ui_state, [path...; name])
+    # Recursive renderer for HierarchyNode tree
+    function render_node(node::HierarchyNode, path::Vector{String}=String[])
+        full_path = vcat(path, node.name)
+        if isempty(children(node))
+            label = node.name
+            selected = get(ui_state, :selected_path, String[]) == full_path
+            if ig.Selectable(label, selected)
+                ui_state[:selected_path] = full_path
+                ui_state[:selected_measurements] = node.measurements
+            end
+        else
+            open = ig.TreeNode(node.name)
+            if open
+                for child in children(node)
+                    render_node(child, full_path)
                 end
                 ig.TreePop()
-            end
-        elseif node isa AbstractVector
-            # Leaf node: measurement vector
-            full_path = [path...; name]
-            selected = get(ui_state, :selected_device, nothing) == full_path
-            if ig.Selectable(name, selected)
-                ui_state[:selected_device] = full_path
-                # store the measurements for right panel
-                ui_state[:selected_measurements] = node
             end
         end
     end
 
-    if ig.Begin("Device Hierarchy", C_NULL, ig.ImGuiWindowFlags_MenuBar)
+    if ig.Begin("Hierarchy", C_NULL, ig.ImGuiWindowFlags_MenuBar)
         render_menu_bar(ui_state)
-        # Main layout with two columns
         ig.Columns(2, "main_layout")
-        # ig.SetColumnWidth(0, 300)
-
-        ig.BeginChild("Device Tree", (0, 0), true)
-        # Left panel: Hierarchical device tree
-        if haskey(ui_state, :devices)
-            for (name, node) in ui_state[:devices]
-                render_tree_node(name, node, ui_state)
+        ig.BeginChild("Tree", (0, 0), true)
+        if haskey(ui_state, :hierarchy_root)
+            for child in children(ui_state[:hierarchy_root])
+                render_node(child)
             end
         else
-            ig.Text("No data found")
+            ig.Text("No data loaded")
         end
         ig.EndChild()
         ig.NextColumn()
-
-        # Right panel: measurement selection
-        ig.BeginChild("right_panel", (0, 0), true)
+        ig.BeginChild("Measurements", (0,0), true)
         if haskey(ui_state, :selected_measurements)
-            measurements = ui_state[:selected_measurements]
-            ig.Text("Measurements for " * (haskey(ui_state, :selected_device) ? last(ui_state[:selected_device]) : "" ) * ":")
+            meas_vec = ui_state[:selected_measurements]
+            sel_name = join(get(ui_state, :selected_path, [""]), "/")
+            ig.Text("Measurements for " * sel_name)
             ig.Separator()
-            # List measurements
-            for measurement in measurements
-                selected = get(ui_state, :selected_measurement, nothing) == measurement
-                if ig.Selectable(meas_id(measurement), selected)
-                    ui_state[:selected_measurement] = measurement
+            for m in meas_vec
+                selected = get(ui_state, :selected_measurement, nothing) == m
+                if ig.Selectable(meas_id(m), selected)
+                    ui_state[:selected_measurement] = m
                 end
             end
         else
-            ig.Text("Select a device to view measurements")
-            ig.Separator()
+            ig.Text("Select a leaf to view measurements")
         end
         ig.EndChild()
     end
@@ -131,7 +122,7 @@ function create_window_and_run_loop(root_path::Union{Nothing,String}=nothing; en
     # Auto-load provided root_path
     if root_path !== nothing && root_path != ""
         hierarchy = scan_directory(root_path)
-        ui_state[:devices] = hierarchy.chips
+        ui_state[:hierarchy_root] = hierarchy.root
         ui_state[:all_measurements] = hierarchy.all_measurements
         ui_state[:root_path] = root_path
     end

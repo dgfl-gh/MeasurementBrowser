@@ -8,7 +8,7 @@ include("RuO2Plots.jl")
 include("Gui.jl")
 
 # Re-export main functions
-export start_browser, scan_directory, DeviceHierarchy
+export start_browser, scan_directory, MeasurementHierarchy, HierarchyNode
 export MeasurementInfo, DeviceInfo
 
 end # module MeasurementBrowser
