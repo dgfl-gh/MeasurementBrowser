@@ -1,8 +1,4 @@
-module RuO2Data
-
 using CSV, DataFrames, Statistics, SmoothData, Dates
-
-export find_files, read_iv_sweep, read_fe_pund, read_tlm_4p, clean_title, analyze_breakdown, get_file_patterns, extract_file_info, analyze_files, analyze_pund, extract_datetime_from_filename, sort_files_by_datetime
 
 """
 Find files matching a pattern in the specified directory
@@ -13,61 +9,6 @@ function find_files(pattern, workdir=".")
     return filter(f -> occursin(pattern, f), csv_files)
 end
 
-"""
-Clean up filename for use as plot title/label.
-Creates an informative label showing experiment type, device, and date.
-"""
-function clean_title(filename, workdir=".")
-    info = extract_file_info(filename, workdir)
-
-    # Extract experiment type
-    exp_type = if occursin("I_V Sweep", filename)
-        "IV"
-    elseif occursin("Break", filename)
-        "Oxide Break"
-    elseif occursin("Wakeup", filename)
-        "Wakeup"
-    else
-        ""
-    end
-
-    # Extract device ID from filename
-    device = ""
-    m = match(r"RuO2test_([\w\d^_]+)_([^_\[]+)_([^_\[\(]+)", filename)
-    if m !== nothing
-        device = "RuO2test_$(m.captures[1])_$(m.captures[2])_$(m.captures[3])"
-    end
-
-    # Format date/time
-    date_str = ""
-    if !isempty(info["test_date"])
-        try
-            # Get month and day
-            date_parts = split(info["test_date"])
-            if length(date_parts) >= 3
-                month = date_parts[2]
-                day = parse(Int, date_parts[3])
-                date_str = "$(month)$(day)"
-            end
-        catch
-            date_str = info["test_date"]
-        end
-    end
-
-    # Combine components that are available
-    parts = String[]
-    if !isempty(exp_type)
-        push!(parts, exp_type)
-    end
-    if !isempty(device)
-        push!(parts, device)
-    end
-    if !isempty(date_str)
-        push!(parts, date_str)
-    end
-
-    return isempty(parts) ? strip(replace(filename, r"\.csv$" => "")) : join(parts, " ")
-end
 
 """
 Get standard file patterns for different measurement types
@@ -240,36 +181,6 @@ function analyze_breakdown(df, threshold_current=1e-6)
     )
 end
 
-function extract_file_info(file, workdir=".")
-    file_path = joinpath(workdir, file)
-    file_stat = stat(file_path)
-    file_size = file_stat.size
-    lines = readlines(file_path)
-    header_lines = min(50, length(lines))
-    setup_title = ""
-    test_date = ""
-    test_time = ""
-    device_id = ""
-    for line in lines[1:header_lines]
-        if startswith(line, "Setup title,")
-            setup_title = strip(split(line, ',')[2], '"')
-        elseif startswith(line, "Test date,")
-            test_date = split(line, ',')[2]
-        elseif startswith(line, "Test time,")
-            test_time = split(line, ',')[2]
-        elseif startswith(line, "Device ID,")
-            device_id = length(split(line, ',')) > 1 ? split(line, ',')[2] : ""
-        end
-    end
-    return Dict(
-        "setup_title" => setup_title,
-        "test_date" => test_date,
-        "test_time" => test_time,
-        "device_id" => device_id,
-        "size_bytes" => file_size,
-        "total_lines" => length(lines)
-    )
-end
 
 """
 Perform PUND analysis on the DataFrame
@@ -508,5 +419,3 @@ function sort_files_by_datetime(files)
     
     return sorted_files
 end
-
-end # module

@@ -1,9 +1,4 @@
-module RuO2Plots
-
 using GLMakie, DataFrames, Statistics
-using ..RuO2Data
-
-export plot_iv_sweep, plot_fe_pund, plot_tlm_4p, setup_makie, display_new_window, plot_iv_sweep_by_device, plot_iv_sweep_single
 
 """
 Set up Makie backend
@@ -217,5 +212,3 @@ function plot_tlm_4p(df, title_str="TLM 4-Point")
 
     return fig
 end
-
-end # module

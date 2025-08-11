@@ -81,14 +81,17 @@ function render_device_tree(ui_state)
         if haskey(ui_state, :selected_measurements)
             measurements = ui_state[:selected_measurements]
             ig.Text("Measurements for " * (haskey(ui_state, :selected_device) ? last(ui_state[:selected_device]) : "" ) * ":")
+            ig.Separator()
+            # List measurements
             for measurement in measurements
                 selected = get(ui_state, :selected_measurement, nothing) == measurement
-                if ig.Selectable(measurement.filename, selected)
+                if ig.Selectable(meas_id(measurement), selected)
                     ui_state[:selected_measurement] = measurement
                 end
             end
         else
             ig.Text("Select a device to view measurements")
+            ig.Separator()
         end
         ig.EndChild()
     end

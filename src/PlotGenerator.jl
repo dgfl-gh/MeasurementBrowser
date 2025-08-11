@@ -7,12 +7,6 @@ using DataFrames
 using Statistics
 using CSV
 
-function clean_title(filename::String, workdir::String=".")
-    # Simple title cleaning - remove extension and path
-    base_name = basename(filename)
-    return replace(splitext(base_name)[1], "_" => " ")
-end
-
 function plot_iv_sweep_single(df::DataFrame, title::String)
     fig = Figure(resolution=(800, 600))
     ax = Axis(fig[1, 1], 

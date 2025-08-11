@@ -29,18 +29,22 @@ function scan_directory(root_path::String)::DeviceHierarchy
                 # Use basic file info extraction for now
                 try
                     relative_dir = relpath(root, root_path)
-                    measurement_info = parse_measurement_file(filepath, file)
-                    push!(measurements, measurement_info)
+                    measurement_info = MeasurementInfo(filepath)
+                    # Expand potential multi-device breakdowns
+                    for m in expand_multi_device(measurement_info)
+                        push!(measurements, m)
+                    end
                 catch e
-                    @warn "Could not parse measurement file $filepath: $e"
+                    @warn "Could not parse measurement file $filepath" error=e
                     # Create a basic measurement info
                     relative_dir = relpath(root, root_path)
                     measurement_info = MeasurementInfo(
                         file,
                         filepath,
+                        "Unknown Measurement",
                         "Unknown",
                         nothing,
-                        DeviceInfo("Unknown", "Unknown", "Unknown"),
+                        DeviceInfo("Unknown", "Unknown", "Unknown", "N/A"),
                         Dict{String, Any}()
                     )
                     push!(measurements, measurement_info)
