@@ -21,19 +21,26 @@ struct MeasurementHierarchy
     root::HierarchyNode
     all_measurements::Vector{MeasurementInfo}
     root_path::String
-    index::Dict{Tuple{Vararg{String}}, HierarchyNode}
+    index::Dict{Tuple{Vararg{String}},HierarchyNode}
 end
 
 # ---------------------------------------------------------------------------
 # Sorting helpers (generic, reusable)
 # ---------------------------------------------------------------------------
 function roman_value(s::AbstractString)
-    ROMAN_MAP = Dict('I'=>1,'V'=>5,'X'=>10,'L'=>50)
+    ROMAN_MAP = Dict('I' => 1, 'V' => 5, 'X' => 10, 'L' => 50)
     isempty(s) && return nothing
-    total = 0; prev = 0
+    total = 0
+    prev = 0
     for c in reverse(uppercase(s))
-        v = get(ROMAN_MAP, c, 0); v == 0 && return nothing
-        if v < prev; total -= v else total += v; prev = v end
+        v = get(ROMAN_MAP, c, 0)
+        v == 0 && return nothing
+        if v < prev
+            total -= v
+        else
+            total += v
+            prev = v
+        end
     end
     return total
 end
@@ -69,13 +76,13 @@ function Base.sort!(node::HierarchyNode)
         sort!(ch)
     end
     if _roman_sortable(node.children)
-        sort!(node.children, by = c -> roman_value(c.name))
+        sort!(node.children, by=c -> roman_value(c.name))
     else
-        sort!(node.children, by = c -> natural_key(c.name))
+        sort!(node.children, by=c -> natural_key(c.name))
     end
     # Sort measurements chronologically
     for ch in node.children
-        sort!(ch.measurements, by = m -> m.timestamp === nothing ? DateTime(typemax(Date).year) : m.timestamp)
+        sort!(ch.measurements, by=m -> m.timestamp === nothing ? DateTime(typemax(Date).year) : m.timestamp)
     end
     return node
 end
@@ -91,7 +98,7 @@ end
 # ---------------------------------------------------------------------------
 function MeasurementHierarchy(measurements::Vector{MeasurementInfo}, root_path::String)
     root = HierarchyNode("/", :root)
-    index = Dict{Tuple{Vararg{String}}, HierarchyNode}()
+    index = Dict{Tuple{Vararg{String}},HierarchyNode}()
     function ensure_child(parent::HierarchyNode, name::String, kind::Symbol, path_tuple::Tuple{Vararg{String}})
         for ch in parent.children
             if ch.name == name
@@ -136,7 +143,7 @@ function scan_directory(root_path::String)::MeasurementHierarchy
                         push!(measurements, m)
                     end
                 catch e
-                    @warn "Could not parse measurement file $filepath" error=e
+                    @warn "Could not parse measurement file $filepath" error = e
                 end
             end
         end
@@ -148,21 +155,20 @@ end
 Get statistics for a device (all measurements)
 """
 function get_device_stats(measurements::Vector{MeasurementInfo})
-    stats = Dict{String, Any}()
-    
+    stats = Dict{String,Any}()
+
     stats["total_measurements"] = length(measurements)
     stats["measurement_types"] = unique([m.measurement_type for m in measurements])
-    
+
     # Time range
     timestamps = [m.timestamp for m in measurements if m.timestamp !== nothing]
     if !isempty(timestamps)
         stats["first_measurement"] = minimum(timestamps)
         stats["last_measurement"] = maximum(timestamps)
-        stats["duration"] = maximum(timestamps) - minimum(timestamps)
     end
-    
+
     # Parameter ranges
-    all_params = Dict{String, Vector{Any}}()
+    all_params = Dict{String,Vector{Any}}()
     for measurement in measurements
         for (key, value) in measurement.parameters
             if !haskey(all_params, key)
@@ -171,50 +177,50 @@ function get_device_stats(measurements::Vector{MeasurementInfo})
             push!(all_params[key], value)
         end
     end
-    
-    stats["parameter_ranges"] = Dict{String, Any}()
+
+    stats["parameter_ranges"] = Dict{String,Any}()
     for (param, values) in all_params
         if eltype(values) <: Number && !isempty(values)
             stats["parameter_ranges"][param] = (minimum(values), maximum(values))
         end
     end
-    
+
     return stats
 end
 
 """
 Filter measurements by criteria
 """
-function filter_measurements(measurements::Vector{MeasurementInfo}; 
-                           measurement_type::Union{String, Nothing} = nothing,
-                           date_range::Union{Tuple{DateTime, DateTime}, Nothing} = nothing,
-                           parameter_filters::Dict{String, Any} = Dict())
-    
+function filter_measurements(measurements::Vector{MeasurementInfo};
+    measurement_type::Union{String,Nothing}=nothing,
+    date_range::Union{Tuple{DateTime,DateTime},Nothing}=nothing,
+    parameter_filters::Dict{String,Any}=Dict())
+
     filtered = measurements
-    
+
     # Filter by measurement type
     if measurement_type !== nothing
         filtered = filter(m -> m.measurement_type == measurement_type, filtered)
     end
-    
+
     # Filter by date range
     if date_range !== nothing
         start_date, end_date = date_range
-        filtered = filter(m -> m.timestamp !== nothing && 
-                             start_date <= m.timestamp <= end_date, filtered)
+        filtered = filter(m -> m.timestamp !== nothing &&
+                start_date <= m.timestamp <= end_date, filtered)
     end
-    
+
     # Filter by parameters
     for (param, criteria) in parameter_filters
         if isa(criteria, Tuple) && length(criteria) == 2  # Range filter
             min_val, max_val = criteria
-            filtered = filter(m -> haskey(m.parameters, param) && 
-                                 min_val <= m.parameters[param] <= max_val, filtered)
+            filtered = filter(m -> haskey(m.parameters, param) &&
+                    min_val <= m.parameters[param] <= max_val, filtered)
         else  # Exact match
-            filtered = filter(m -> haskey(m.parameters, param) && 
-                                 m.parameters[param] == criteria, filtered)
+            filtered = filter(m -> haskey(m.parameters, param) &&
+                    m.parameters[param] == criteria, filtered)
         end
     end
-    
+
     return filtered
 end

@@ -9,6 +9,6 @@ include("Gui.jl")
 
 # Re-export main functions
 export start_browser, scan_directory, MeasurementHierarchy, HierarchyNode
-export MeasurementInfo, DeviceInfo
+export MeasurementInfo, DeviceInfo, mark_dirty!
 
 end # module MeasurementBrowser
