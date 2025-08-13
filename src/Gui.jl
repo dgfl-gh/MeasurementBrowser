@@ -1,7 +1,6 @@
 import GLFW
 using GLMakie
 import GLMakie.Makie as Makie
-using GLMakie: LAST_INLINE
 import CImGui as ig
 import CImGui.CSyntax: @c
 import ModernGL as gl
@@ -166,11 +165,14 @@ end
 
 function render_device_tree(ui_state)
     ui_state[:_node_count] = 0
-    filter_ptr = get!(ui_state, :_imgui_text_filter) do
+    filter_tree = get!(ui_state, :_imgui_text_filter_tree) do
+        ig.ImGuiTextFilter_ImGuiTextFilter(C_NULL)
+    end
+    filter_meas = get!(ui_state, :_imgui_text_filter_meas) do
         ig.ImGuiTextFilter_ImGuiTextFilter(C_NULL)
     end
 
-    node_matches(node::HierarchyNode) = ig.ImGuiTextFilter_PassFilter(filter_ptr, node.name, C_NULL)
+    node_matches(node::HierarchyNode) = ig.ImGuiTextFilter_PassFilter(filter_tree, node.name, C_NULL)
     subtree_match(node::HierarchyNode) = node_matches(node) || any(subtree_match(c) for c in children(node))
 
     function render_node(node::HierarchyNode, path::Vector{String}=String[], force_show::Bool=false)
@@ -206,7 +208,7 @@ function render_device_tree(ui_state)
         if selected
             flags |= ig.ImGuiTreeNodeFlags_Selected
         end
-        if ig.ImGuiTextFilter_IsActive(filter_ptr) && direct_match && !is_leaf
+        if ig.ImGuiTextFilter_IsActive(filter_tree) && direct_match && !is_leaf
             flags |= ig.ImGuiTreeNodeFlags_DefaultOpen
         end
 
@@ -236,14 +238,14 @@ function render_device_tree(ui_state)
     if ig.Begin("Hierarchy", C_NULL, ig.ImGuiWindowFlags_MenuBar)
         render_menu_bar(ui_state)
 
+        ig.Columns(2, "main_layout")
+        ig.BeginChild("Tree", (0, 0), true)
         ig.SetNextItemWidth(-1)
         ig.SetNextItemShortcut(
             ig.ImGuiMod_Ctrl | ig.ImGuiKey_F,
             ig.ImGuiInputFlags_Tooltip
         )
-        ig.ImGuiTextFilter_Draw(filter_ptr, "##tree_filter", -1)
-        ig.Columns(2, "main_layout")
-        ig.BeginChild("Tree", (0, 0), true)
+        ig.ImGuiTextFilter_Draw(filter_tree, "##tree_filter", -1)
         if haskey(ui_state, :hierarchy_root)
             if ig.BeginTable("tree_table", 1, ig.ImGuiTableFlags_RowBg | ig.ImGuiTableFlags_ScrollY)
                 for child in children(ui_state[:hierarchy_root])
@@ -257,6 +259,12 @@ function render_device_tree(ui_state)
         ig.EndChild()
         ig.NextColumn()
         ig.BeginChild("Measurements", (0, 0), true)
+        ig.SetNextItemWidth(-1)
+        ig.SetNextItemShortcut(
+            ig.ImGuiMod_Ctrl | ig.ImGuiKey_F,
+            ig.ImGuiInputFlags_Tooltip
+        )
+        ig.ImGuiTextFilter_Draw(filter_meas, "##measurements_filter", -1)
         if haskey(ui_state, :selected_measurements)
             meas_vec = ui_state[:selected_measurements]
             sel_name = join(get(ui_state, :selected_path, [""]), "/")

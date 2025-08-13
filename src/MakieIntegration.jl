@@ -11,6 +11,7 @@ import ModernGL as gl
 import GLFW
 import GLMakie
 import GLMakie.Makie as Makie
+using PrecompileTools: @setup_workload, @compile_workload
 
 export MakieFigure, ImMakieWindow, ImMakieFigure, destroy_context
 
@@ -109,7 +110,7 @@ function draw_axisscale_buttons(scale, ticks, idx)
         scale[] = identity
     end
     ig.SameLine()
-    if ig.RadioButton("pseudolog10##$(idx)", scale[] === Makie.pseudolog10)
+    if ig.RadioButton("log10##$(idx)", scale[] === Makie.pseudolog10)
         scale[] = Makie.pseudolog10
         # ticks[] = Makie.LogTicks(Makie.LinearTicks(5))
     end
@@ -289,9 +290,9 @@ end
 function theme_imgui()
     theme = Makie.theme_light()
     # theme = Makie.theme_dark()
-    # theme.Legend.framevisible = true
+    theme.Legend.framevisible = true
     # theme.Legend.backgroundcolor = Makie.RGBAf(0, 0, 0, 0.75)
-    # theme.Legend.padding = (5, 5, 5, 5)
+    theme.Legend.padding = (5, 5, 5, 5)
     # theme.textcolor = :gray90
 
     # For some reason FXAA causes artifacts with the dark theme
@@ -305,25 +306,25 @@ function __init__()
     Makie.set_theme!(theme_imgui())
 end
 
-# @setup_workload begin
-#     f = GLMakie.Figure()
-#     GLMakie.lines(f[1, 1], rand(10))
+@setup_workload begin
+    f = GLMakie.Figure()
+    GLMakie.lines(f[1, 1], rand(10))
 
-#     @compile_workload begin
-#         ig.set_backend(:GlfwOpenGL3)
-#         ctx = ig.CreateContext()
+    @compile_workload begin
+        ig.set_backend(:GlfwOpenGL3)
+        ctx = ig.CreateContext()
 
-#         ig.render(ctx; window_title="CImGui/Makie precompilation workload", opengl_version=v"3.3") do
-#             ig.Begin("Foo")
-#             ig.MakieFigure("plot", f)
-#             ig.End()
+        ig.render(ctx; window_title="CImGui/Makie precompilation workload", opengl_version=v"3.3") do
+            ig.Begin("Foo")
+            MakieFigure("plot", f)
+            ig.End()
 
-#             return :imgui_exit_loop
-#         end
+            return :imgui_exit_loop
+        end
 
-#         destroy_context()
-#         ig._backend = nothing
-#     end
-# end
+        destroy_context()
+        ig._backend = nothing
+    end
+end
 
 end
