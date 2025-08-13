@@ -1,4 +1,5 @@
 using GLMakie, DataFrames, Statistics
+export figure_for_file
 
 """
 Set up Makie backend
@@ -25,13 +26,13 @@ function plot_iv_sweep_single(df, title_str="I-V Sweep")
 
     fig = Figure(size=(800, 600))
     ax = Axis(fig[1, 1], xlabel="Voltage (V)", ylabel="Current (A)", title=title_str)
-    
+
     lines!(ax, df.voltage, df.current1, color=:blue, linewidth=2, label="Current1")
     if hasproperty(df, :current2) && any(df.current1 .!= df.current2)
         lines!(ax, df.voltage, df.current2, color=:red, linewidth=2, label="Current2")
         axislegend(ax, position=:rt)
     end
-    
+
     return fig
 end
 
@@ -148,6 +149,56 @@ function plot_fe_pund(df, title_str="FE PUND")
     # legends
     Legend(fig[1, 1], [l1, l2, l3], ["Current", "Voltage", "FE Current"], tellwidth=false, tellheight=false, halign=:left, valign=:top)
     axislegend(ax3)
+
+    return fig
+end
+
+"""
+    figure_for_file(path::AbstractString) -> Union{Figure,Nothing}
+
+Given a filepath to a measurement CSV, detect its measurement type
+from the filename alone (no MeasurementInfo dependency), load the data
+with the appropriate reader, and return a Makie Figure. Returns `nothing`
+if unsupported or loading/plotting fails.
+"""
+function figure_for_file(path::AbstractString)
+    isfile(path) || return nothing
+    fname = basename(path)
+    dir = dirname(path)
+    lower = lowercase(fname)
+
+    # Helper to derive a title (strip .csv)
+    title = strip(replace(fname, r"\.csv$" => ""))
+
+    df = nothing
+    fig = nothing
+    try
+        if occursin("fe pund", lower) || occursin("fepund", lower)
+            df = read_fe_pund(fname, dir)
+            fig = plot_fe_pund(df, title)
+        elseif occursin("i_v sweep", lower) || occursin("iv sweep", lower)
+            df = read_iv_sweep(fname, dir)
+            fig = plot_iv_sweep_single(df, title)
+        elseif occursin("tlm_4p", lower) || occursin("tlm", lower)
+            df = read_tlm_4p(fname, dir)
+            fig = plot_tlm_4p(df, title)
+        elseif occursin("break", lower) || occursin("breakdown", lower)
+            # Treat as breakdown I-V for now
+            df = read_iv_sweep(fname, dir)
+            fig = plot_iv_sweep_single(df, title * " (Breakdown)")
+        else
+            # Fallback attempt: try I-V sweep reader
+            try
+                df = read_iv_sweep(fname, dir)
+                fig = plot_iv_sweep_single(df, title)
+            catch
+                return nothing
+            end
+        end
+    catch err
+        @warn "figure_for_file failed" path error = err
+        return nothing
+    end
 
     return fig
 end

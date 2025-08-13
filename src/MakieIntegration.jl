@@ -43,7 +43,7 @@ function destroy_context()
 end
 
 Base.isopen(window::ImMakieWindow) = isopen(window.glfw_window)
-GLMakie.destroy!(::ImMakieWindow) = destroy_context() # changed from `nothing` to avoid error while exiting the application
+GLMakie.destroy!(::ImMakieWindow) = nothing
 GLMakie.reopen!(screen::GLMakie.Screen{ImMakieWindow}) = screen
 GLMakie.set_screen_visibility!(::GLMakie.Screen{ImMakieWindow}, ::Bool) = nothing
 GLMakie.framebuffer_size(window::ImMakieWindow) = GLMakie.framebuffer_size(window.glfw_window)
@@ -136,11 +136,21 @@ function MakieFigure(title_id::String, f::GLMakie.Figure; auto_resize_x=true, au
     ig.PushID(title_id)
     id = ig.GetID(title_id)
 
-    if !haskey(makie_context, id)
+    if haskey(makie_context, id)
+        imf = makie_context[id]
+        if imf.figure !== f
+            # Simple/safe replacement: reuse existing screen & context
+            imf.figure = f
+            scene = Makie.get_scene(f)
+            scene.events.window_open[] = true
+            display(imf.screen, f)
+            imf.times_idx = 1
+            @debug "replaced figure for " id
+        end
+    else
         window = ig.current_window()
         makie_window = ImMakieWindow(window)
         screen = GLMakie.Screen(; window=makie_window, start_renderloop=false)
-
         makie_context[id] = ImMakieFigure(f, screen)
         scene = Makie.get_scene(f)
         scene.events.window_open[] = true
@@ -149,7 +159,7 @@ function MakieFigure(title_id::String, f::GLMakie.Figure; auto_resize_x=true, au
     end
 
     imfigure = makie_context[id]
-    scene = Makie.get_scene(f)
+    scene = Makie.get_scene(imfigure.figure)
 
     region_avail = ig.GetContentRegionAvail()
     region_size = (Int(region_avail.x), Int(region_avail.y))
@@ -277,11 +287,12 @@ function MakieFigure(title_id::String, f::GLMakie.Figure; auto_resize_x=true, au
 end
 
 function theme_imgui()
-    theme = Makie.theme_dark()
-    theme.Legend.framevisible = true
-    theme.Legend.backgroundcolor = Makie.RGBAf(0, 0, 0, 0.75)
-    theme.Legend.padding = (5, 5, 5, 5)
-    theme.textcolor = :gray90
+    theme = Makie.theme_light()
+    # theme = Makie.theme_dark()
+    # theme.Legend.framevisible = true
+    # theme.Legend.backgroundcolor = Makie.RGBAf(0, 0, 0, 0.75)
+    # theme.Legend.padding = (5, 5, 5, 5)
+    # theme.textcolor = :gray90
 
     # For some reason FXAA causes artifacts with the dark theme
     theme.GLMakie = Makie.Attributes(fxaa=false)

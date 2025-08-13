@@ -1,6 +1,7 @@
 import GLFW
 using GLMakie
 import GLMakie.Makie as Makie
+using GLMakie: LAST_INLINE
 import CImGui as ig
 import CImGui.CSyntax: @c
 import ModernGL as gl
@@ -121,22 +122,6 @@ function render_perf_window(ui_state)
         end
     end
     ig.End()
-end
-
-"""
-Initialize a placeholder Makie figure once (outside the per-frame loop)
-"""
-function init_placeholder_plot!(ui_state)
-    haskey(ui_state, :plot_figure) && return
-    f = Figure()
-    ax = Axis(f[1, 1]; title="Placeholder Plot")
-    xs = range(0, 10; length=200)
-    lines!(ax, xs, sin.(xs); label="sin(x)")
-    lines!(ax, xs, cos.(xs); label="cos(x)")
-    axislegend(ax; position=:rb)
-    ui_state[:plot_figure] = f
-    ui_state[:plot_axis] = ax
-    ui_state[:_axis_limits_history] = Tuple{Float32,Float32,Float32,Float32}[]
 end
 
 function render_main_window(ui_state)
@@ -284,7 +269,7 @@ function render_device_tree(ui_state)
                 end
             end
         else
-            ig.Text("Select a leaf to view measurements")
+            ig.Text("Select a device to view measurements")
         end
         ig.EndChild()
     end
@@ -292,14 +277,51 @@ function render_device_tree(ui_state)
 end
 
 function render_plot_window(ui_state)
+    # Figure cache: filepath => (mtime, Figure)
+    cache = get!(ui_state, :_plot_cache) do
+        Dict{String,Tuple{DateTime,Figure}}()
+    end
+    m = get(ui_state, :selected_measurement, nothing)
+    if m !== nothing
+        filepath = m.filepath
+        last_path = get(ui_state, :_last_plotted_path, nothing)
+        # Determine modification time
+        mtime = Dates.unix2datetime(stat(filepath).mtime)
+        need_refresh = false
+        if last_path !== filepath || !haskey(cache, filepath)
+            need_refresh = true
+            @debug "refreshing plot" need_refresh last_path filepath
+        else
+            cached_mtime, _ = cache[filepath]
+            need_refresh = cached_mtime != mtime
+        end
+        if need_refresh
+            newfig = figure_for_file(filepath)
+            @debug "Refreshing plot" newfig
+            if newfig !== nothing
+                cache[filepath] = (mtime, newfig)
+                ui_state[:plot_figure] = newfig
+                ui_state[:_last_plotted_path] = filepath
+            else
+                delete!(ui_state, :plot_figure)
+                delete!(ui_state, :_last_plotted_path)
+            end
+        end
+    end
     if ig.Begin("Plot Area")
         if haskey(ui_state, :plot_figure)
             f = ui_state[:plot_figure]
             _time!(ui_state, :makie_fig) do
-                MakieFigure("measurement_plot", f; auto_resize_x=false, auto_resize_y=true)
+                MakieFigure("measurement_plot", f; auto_resize_x=true, auto_resize_y=true)
             end
         else
             ig.Text("No plot available")
+        end
+        ig.Separator()
+        if m === nothing
+            ig.TextDisabled("Select a measurement to generate a plot")
+        else
+            ig.TextDisabled(basename(m.filepath))
         end
     end
     ig.End()
@@ -377,7 +399,6 @@ function create_window_and_run_loop(root_path::Union{Nothing,String}=nothing; en
     ig.set_backend(:GlfwOpenGL3)
     ui_state = Dict{Symbol,Any}()
     ui_state[:_frame] = 0
-    init_placeholder_plot!(ui_state)
     ctx = ig.CreateContext()
     io = ig.GetIO()
     io.ConfigFlags = unsafe_load(io.ConfigFlags) | ig.ImGuiConfigFlags_DockingEnable
@@ -393,7 +414,7 @@ function create_window_and_run_loop(root_path::Union{Nothing,String}=nothing; en
     ig.render(
         ctx;
         engine,
-        window_size=(1280, 720),
+        window_size=(1920, 1080),
         window_title="Measurement Browser",
         opengl_version=v"3.3",
         spawn,
