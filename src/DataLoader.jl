@@ -2,6 +2,7 @@ module DataLoader
 
 using CSV
 using DataFrames
+using Dates
 using PrecompileTools: @setup_workload, @compile_workload
 
 export find_files, get_file_patterns, read_iv_sweep, read_fe_pund, read_tlm_4p
@@ -172,7 +173,7 @@ Returns DateTime object or nothing if parsing fails
 """
 function extract_datetime_from_filename(filename)
     # Look for pattern like "; 2025-08-06 12_20_59]"
-    datetime_match = match(r"; (\d{4}-\d{2}-\d{2}) (\d{2})_(\d{2})_(\d{2})\]", filename)
+    datetime_match = match(r"; (\d{4}-\d{2}-\d{2}) (\d{2})_(\d{2})_(\d{2})", filename)
     if datetime_match !== nothing
         date_part = datetime_match.captures[1]
         hour = datetime_match.captures[2]
