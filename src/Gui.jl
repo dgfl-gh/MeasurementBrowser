@@ -72,6 +72,16 @@ function _print_perf_summary(ui_state)
     end
 end
 
+function _helpmarker(desc::String)
+    ig.TextDisabled("(?)")
+    if ig.BeginItemTooltip()
+        ig.PushTextWrapPos(ig.GetFontSize() * 35.0)
+        ig.TextUnformatted(desc)
+        ig.PopTextWrapPos()
+        ig.EndTooltip()
+    end
+end
+
 function render_perf_window(ui_state)
     if !get(ui_state, :show_performance_window, false)
         return
@@ -163,15 +173,21 @@ function render_menu_bar(ui_state)
     end
 end
 
-function render_device_tree(ui_state)
-    ui_state[:_node_count] = 0
-    filter_tree = get!(ui_state, :_imgui_text_filter_tree) do
-        ig.ImGuiTextFilter_ImGuiTextFilter(C_NULL)
-    end
-    filter_meas = get!(ui_state, :_imgui_text_filter_meas) do
-        ig.ImGuiTextFilter_ImGuiTextFilter(C_NULL)
-    end
+# Left panel (hierarchy tree) rendering
+function _render_hierarchy_tree_panel(ui_state, filter_tree)
+    ig.BeginChild("Tree", (0, 0), true)
+    ig.SeparatorText("Device Selection")
+    ig.Text("Filter")
+    ig.SameLine()
+    _helpmarker("incl,-excl")
+    ig.SameLine()
+    ig.SetNextItemShortcut(
+        ig.ImGuiMod_Ctrl | ig.ImGuiKey_F,
+        ig.ImGuiInputFlags_Tooltip
+    )
+    ig.ImGuiTextFilter_Draw(filter_tree, "##tree_filter", -1)
 
+    # Local helpers tied to filter object
     node_matches(node::HierarchyNode) = ig.ImGuiTextFilter_PassFilter(filter_tree, node.name, C_NULL)
     subtree_match(node::HierarchyNode) = node_matches(node) || any(subtree_match(c) for c in children(node))
 
@@ -218,10 +234,8 @@ function render_device_tree(ui_state)
             ui_state[:selected_path] = full_path
             if is_leaf
                 ui_state[:selected_measurements] = node.measurements
-            else
-                if haskey(ui_state, :selected_measurements)
-                    delete!(ui_state, :selected_measurements)
-                end
+            elseif haskey(ui_state, :selected_measurements)
+                delete!(ui_state, :selected_measurements)
             end
         end
         # render children
@@ -234,52 +248,73 @@ function render_device_tree(ui_state)
         ig.PopID()
     end
 
-    # render the hierarchy tree window
+    if haskey(ui_state, :hierarchy_root)
+        if ig.BeginTable("tree_table", 1, ig.ImGuiTableFlags_RowBg | ig.ImGuiTableFlags_ScrollY)
+            for child in children(ui_state[:hierarchy_root])
+                render_node(child, String[], false)
+            end
+            ig.EndTable()
+        end
+    else
+        ig.Text("No data loaded")
+    end
+    ig.EndChild()
+end
+
+# Right panel (measurements list) rendering
+function _render_measurements_panel(ui_state, filter_meas)
+    ig.BeginChild("Measurements", (0, 0), true)
+    ig.SeparatorText("Measurement Selection")
+    ig.Text("Filter")
+    ig.SameLine()
+    _helpmarker("incl,-excl")
+    ig.SameLine()
+    ig.SetNextItemShortcut(
+        ig.ImGuiMod_Ctrl | ig.ImGuiKey_F,
+        ig.ImGuiInputFlags_Tooltip
+    )
+    ig.ImGuiTextFilter_Draw(filter_meas, "##measurements_filter", -1)
+
+    if haskey(ui_state, :selected_measurements)
+        meas_vec = ui_state[:selected_measurements]
+        sel_name = join(get(ui_state, :selected_path, [""]), "/")
+        ig.Text("Measurements for $sel_name")
+        ig.Separator()
+        any_shown = false
+        for m in meas_vec
+            passes = !ig.ImGuiTextFilter_IsActive(filter_meas) ||
+                     ig.ImGuiTextFilter_PassFilter(filter_meas, meas_id(m), C_NULL) ||
+                     ig.ImGuiTextFilter_PassFilter(filter_meas, m.clean_title, C_NULL) ||
+                     ig.ImGuiTextFilter_PassFilter(filter_meas, m.measurement_type, C_NULL)
+            passes || continue
+            any_shown = true
+            selected = get(ui_state, :selected_measurement, nothing) == m
+            if ig.Selectable(meas_id(m), selected)
+                ui_state[:selected_measurement] = m
+            end
+        end
+        !any_shown && ig.TextDisabled("No measurements match filter")
+    else
+        ig.Text("Select a device to view measurements")
+    end
+    ig.EndChild()
+end
+
+function render_selection_window(ui_state)
+    ui_state[:_node_count] = 0
+    filter_tree = get!(ui_state, :_imgui_text_filter_tree) do
+        ig.ImGuiTextFilter_ImGuiTextFilter(C_NULL)
+    end
+    filter_meas = get!(ui_state, :_imgui_text_filter_meas) do
+        ig.ImGuiTextFilter_ImGuiTextFilter(C_NULL)
+    end
+
     if ig.Begin("Hierarchy", C_NULL, ig.ImGuiWindowFlags_MenuBar)
         render_menu_bar(ui_state)
-
         ig.Columns(2, "main_layout")
-        ig.BeginChild("Tree", (0, 0), true)
-        ig.SetNextItemWidth(-1)
-        ig.SetNextItemShortcut(
-            ig.ImGuiMod_Ctrl | ig.ImGuiKey_F,
-            ig.ImGuiInputFlags_Tooltip
-        )
-        ig.ImGuiTextFilter_Draw(filter_tree, "##tree_filter", -1)
-        if haskey(ui_state, :hierarchy_root)
-            if ig.BeginTable("tree_table", 1, ig.ImGuiTableFlags_RowBg | ig.ImGuiTableFlags_ScrollY)
-                for child in children(ui_state[:hierarchy_root])
-                    render_node(child, String[], false)
-                end
-                ig.EndTable()
-            end
-        else
-            ig.Text("No data loaded")
-        end
-        ig.EndChild()
+        _render_hierarchy_tree_panel(ui_state, filter_tree)
         ig.NextColumn()
-        ig.BeginChild("Measurements", (0, 0), true)
-        ig.SetNextItemWidth(-1)
-        ig.SetNextItemShortcut(
-            ig.ImGuiMod_Ctrl | ig.ImGuiKey_F,
-            ig.ImGuiInputFlags_Tooltip
-        )
-        ig.ImGuiTextFilter_Draw(filter_meas, "##measurements_filter", -1)
-        if haskey(ui_state, :selected_measurements)
-            meas_vec = ui_state[:selected_measurements]
-            sel_name = join(get(ui_state, :selected_path, [""]), "/")
-            ig.Text("Measurements for $sel_name")
-            ig.Separator()
-            for m in meas_vec
-                selected = get(ui_state, :selected_measurement, nothing) == m
-                if ig.Selectable(meas_id(m), selected)
-                    ui_state[:selected_measurement] = m
-                end
-            end
-        else
-            ig.Text("Select a device to view measurements")
-        end
-        ig.EndChild()
+        _render_measurements_panel(ui_state, filter_meas)
     end
     ig.End()
 end
@@ -380,8 +415,11 @@ function render_info_window(ui_state)
             ig.BulletText("Title: $(m.clean_title)")
             ig.BulletText("Type: $(m.measurement_type)")
             ig.BulletText("Timestamp: $(m.timestamp)")
-            ig.BulletText("Filename: $(m.filename)")
-            ig.BulletText("Path: $(m.filepath)")
+            # ig.BulletText("Filename: $(m.filename)");
+            # ig.BulletText("Path: $(m.filepath)")
+            ig.BulletText("Filename:")
+            ig.SameLine()
+            ig.TextLinkOpenURL(m.filename, m.filepath)
             di = m.device_info
             ig.Separator()
             ig.Text("Device Info")
@@ -411,6 +449,7 @@ function create_window_and_run_loop(root_path::Union{Nothing,String}=nothing; en
     io = ig.GetIO()
     io.ConfigFlags = unsafe_load(io.ConfigFlags) | ig.ImGuiConfigFlags_DockingEnable
     io.ConfigFlags = unsafe_load(io.ConfigFlags) | ig.ImGuiConfigFlags_ViewportsEnable
+    io.ConfigFlags = unsafe_load(io.ConfigFlags) | ig.ImGuiConfigFlags_NavEnableKeyboard
     ig.StyleColorsDark()
     if root_path !== nothing && root_path != ""
         hierarchy = scan_directory(root_path)
@@ -440,7 +479,7 @@ function create_window_and_run_loop(root_path::Union{Nothing,String}=nothing; en
             end
         end
         _time!(ui_state, :device_tree) do
-            render_device_tree(ui_state)
+            render_selection_window(ui_state)
         end
         _time!(ui_state, :info) do
             render_info_window(ui_state)
