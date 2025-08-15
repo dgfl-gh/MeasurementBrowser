@@ -158,6 +158,14 @@ function render_menu_bar(ui_state)
                     ui_state[:all_measurements] = hierarchy.all_measurements
                     ui_state[:root_path] = path
                     ui_state[:has_device_metadata] = hierarchy.has_device_metadata
+                    # Collect device-level metadata keys (union)
+                    all_params = Set{Symbol}()
+                    for m in hierarchy.all_measurements
+                        for k in keys(m.device_info.parameters)
+                            push!(all_params, k)
+                        end
+                    end
+                    ui_state[:device_metadata_keys] = sort!(collect(all_params); by=String)
                 end
             end
             ig.EndMenu()
@@ -190,6 +198,8 @@ function _render_hierarchy_tree_panel(ui_state, filter_tree)
     )
     ig.ImGuiTextFilter_Draw(filter_tree, "##tree_filter", -1)
 
+    meta_keys = get(ui_state, :device_metadata_keys, Symbol[])
+
     # Local helpers tied to filter object
     node_matches(node::HierarchyNode) = ig.ImGuiTextFilter_PassFilter(filter_tree, node.name, C_NULL)
     subtree_match(node::HierarchyNode) = node_matches(node) || any(subtree_match(c) for c in children(node))
@@ -200,7 +210,7 @@ function _render_hierarchy_tree_panel(ui_state, filter_tree)
 
         ui_state[:_node_count] += 1
         ig.TableNextRow()
-        ig.TableNextColumn()
+        ig.TableSetColumnIndex(0)
 
         full_path = vcat(path, node.name)
         direct_match = force_show || node_matches(node)
@@ -215,7 +225,8 @@ function _render_hierarchy_tree_panel(ui_state, filter_tree)
             ig.ImGuiTreeNodeFlags_OpenOnDoubleClick |
             ig.ImGuiTreeNodeFlags_NavLeftJumpsToParent |
             ig.ImGuiTreeNodeFlags_SpanFullWidth |
-            ig.ImGuiTreeNodeFlags_DrawLinesToNodes
+            ig.ImGuiTreeNodeFlags_DrawLinesToNodes |
+            ig.ImGuiTreeNodeFlags_SpanAllColumns
         )
         if is_leaf
             flags |= (
@@ -241,6 +252,23 @@ function _render_hierarchy_tree_panel(ui_state, filter_tree)
                 delete!(ui_state, :selected_device)
             end
         end
+
+        # Fill metadata columns
+        dev_meta = nothing
+        if is_leaf && !isempty(node.measurements)
+            dev_meta = first(node.measurements).device_info.parameters
+        end
+        for (i, k) in enumerate(meta_keys)
+            ig.TableSetColumnIndex(i)
+            if dev_meta !== nothing && haskey(dev_meta, k)
+                ig.Text(string(dev_meta[k]))
+            elseif is_leaf
+                ig.TextDisabled("--")
+            else
+                # non-leaf left blank
+            end
+        end
+
         # render children
         if opened && !is_leaf
             for c in children(node)
@@ -252,7 +280,20 @@ function _render_hierarchy_tree_panel(ui_state, filter_tree)
     end
 
     if haskey(ui_state, :hierarchy_root)
-        if ig.BeginTable("tree_table", 1, ig.ImGuiTableFlags_RowBg | ig.ImGuiTableFlags_ScrollY)
+        local table_flags = ig.ImGuiTableFlags_BordersV | ig.ImGuiTableFlags_BordersOuterH |
+                            ig.ImGuiTableFlags_Resizable | ig.ImGuiTableFlags_RowBg |
+                            ig.ImGuiTableFlags_Reorderable | ig.ImGuiTableFlags_Hideable
+        ncols = 1 + length(meta_keys) + 1
+        if ig.BeginTable("tree_table", ncols, table_flags)
+            local index_flags = ig.ImGuiTableColumnFlags_NoHide | ig.ImGuiTableColumnFlags_NoReorder |
+                                ig.ImGuiTableColumnFlags_NoSort | ig.ImGuiTableColumnFlags_WidthStretch
+            ig.TableSetupColumn("Device", index_flags, 5.0)
+            for k in meta_keys
+                ig.TableSetupColumn(String(k), ig.ImGuiTableColumnFlags_AngledHeader | ig.ImGuiTableFlags_SizingFixedFit)
+            end
+            ig.TableSetupColumn("")
+            ig.TableAngledHeadersRow()
+            ig.TableHeadersRow()
             for child in children(ui_state[:hierarchy_root])
                 render_node(child, String[], false)
             end
@@ -518,6 +559,13 @@ function create_window_and_run_loop(root_path::Union{Nothing,String}=nothing; en
         ui_state[:all_measurements] = hierarchy.all_measurements
         ui_state[:root_path] = root_path
         ui_state[:has_device_metadata] = hierarchy.has_device_metadata
+        all_params = Set{Symbol}()
+        for m in hierarchy.all_measurements
+            for k in keys(m.device_info.parameters)
+                push!(all_params, k)
+            end
+        end
+        ui_state[:device_metadata_keys] = sort!(collect(all_params); by=String)
     end
     first_frame = Ref(true)
     ig.render(
