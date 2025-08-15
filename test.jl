@@ -4,7 +4,7 @@ using MeasurementBrowser
 if length(ARGS) > 0
     measurement_dir = ARGS[1]
 else
-    measurement_dir = "/home/dgfl/work/Borg/RuO2 processing/099_MeasData/A8"
+    measurement_dir = "/home/dgfl/work/Borg/RuO2 processing/099_MeasData"
 end
 
 if !isdir(measurement_dir)

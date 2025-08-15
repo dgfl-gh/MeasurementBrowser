@@ -15,8 +15,11 @@ const REGEX_DEVICE = r"RuO2test_([A-Z0-9]+)_([A-Z0-9]+)_([A-Z0-9]+(?:W[0-9]+)?)"
 # ---------------------------------------------------------------------------
 
 struct DeviceInfo
-    location::Vector{String}  # variable-length hierarchy
+    location::Vector{String}              # variable-length hierarchy
+    parameters::Dict{Symbol,Any}          # device-level metadata
 end
+
+DeviceInfo(location::Vector{String}) = DeviceInfo(location, Dict{String,Any}())
 
 # ---------------------------------------------------------------------------
 # Measurement related structs
@@ -43,6 +46,7 @@ struct MeasurementHierarchy
     all_measurements::Vector{MeasurementInfo}
     root_path::String
     index::Dict{Tuple{Vararg{String}},HierarchyNode}
+    has_device_metadata::Bool
 end
 
 HierarchyNode(name::String, kind::Symbol) = HierarchyNode(name, kind, HierarchyNode[], MeasurementInfo[])
@@ -121,7 +125,13 @@ end
 
 function parse_device_info(filename::String)
     if (m = match(REGEX_DEVICE, filename)) !== nothing
-        return DeviceInfo(collect(m.captures))
+        # Convert captures (SubString / maybe Nothing) into plain Strings, skipping any missing
+        caps = String[]
+        for c in m.captures
+            c === nothing && continue
+            push!(caps, String(c))
+        end
+        return DeviceInfo(caps)
     end
     return DeviceInfo(["Unknown"])
 end
@@ -192,7 +202,7 @@ function expand_multi_device(meas::MeasurementInfo)::Vector{MeasurementInfo}
         replace(meas.clean_title, dev => p),
         meas.measurement_type,
         meas.timestamp,
-        DeviceInfo(vcat(loc[1:end-1], [p])),
+        DeviceInfo(vcat(loc[1:end-1], [p]), deepcopy(meas.device_info.parameters)),
         deepcopy(meas.parameters),
     ) for p in parts]
 end
@@ -262,7 +272,7 @@ end
 # ---------------------------------------------------------------------------
 # Hierarchy construction
 # ---------------------------------------------------------------------------
-function MeasurementHierarchy(measurements::Vector{MeasurementInfo}, root_path::String)
+function MeasurementHierarchy(measurements::Vector{MeasurementInfo}, root_path::String, has_dev_metadata::Bool)
     root = HierarchyNode("/", :root)
     index = Dict{Tuple{Vararg{String}},HierarchyNode}()
     function ensure_child(parent::HierarchyNode, name::String, kind::Symbol, path_tuple::Tuple{Vararg{String}})
@@ -286,10 +296,13 @@ function MeasurementHierarchy(measurements::Vector{MeasurementInfo}, root_path::
         end
         push!(parent.measurements, m)
     end
-    mh = MeasurementHierarchy(root, measurements, root_path, index)
+    mh = MeasurementHierarchy(root, measurements, root_path, index, has_dev_metadata)
     sort!(mh)
     return mh
 end
+# Backwards-compatible convenience constructor (assumes no metadata)
+MeasurementHierarchy(measurements::Vector{MeasurementInfo}, root_path::String) =
+    MeasurementHierarchy(measurements, root_path, false)
 
 children(node::HierarchyNode) = node.children
 isleaf(node::HierarchyNode) = isempty(node.children)
@@ -297,15 +310,106 @@ isleaf(node::HierarchyNode) = isempty(node.children)
 # ---------------------------------------------------------------------------
 # Scanning
 # ---------------------------------------------------------------------------
+"infer primitive types from string"
+function _infer_meta_value(s::AbstractString)
+    v = strip(s)
+    isempty(v) && return nothing
+    low = lowercase(v)
+    if low in ("true", "t", "yes", "y", "1")
+        return true
+    end
+    if low in ("false", "f", "no", "n", "0")
+        return false
+    end
+    try
+        return parse(Int, v)
+    catch
+    end
+    try
+        return parse(Float64, v)
+    catch
+    end
+    # simple date/datetime patterns
+    for fmt in (dateformat"yyyy-mm-dd", dateformat"yyyy/mm/dd")
+        try
+            return Date(v, fmt)
+        catch
+        end
+    end
+    for fmt in (dateformat"yyyy-mm-dd HH:MM:SS", dateformat"yyyy-mm-ddTHH:MM:SS")
+        try
+            return DateTime(v, fmt)
+        catch
+        end
+    end
+    return v
+end
+
+"""
+    _load_device_info_txt(path) -> Dict{Tuple{Vararg{String}},Dict{String,Any}}
+
+Reads device_info.txt where first column is `device_path` (slash-separated),
+remaining columns are arbitrary device-level parameters.
+"""
+function _load_device_info_txt(path::AbstractString)
+    lines = readlines(path)
+    isempty(lines) && return Dict{Tuple{Vararg{String}},Dict{Symbol,Any}}()
+    header = split(lines[1], ',')
+    length(header) >= 2 || return Dict{Tuple{Vararg{String}},Dict{Symbol,Any}}()
+    devcol = header[1]
+    param_cols = header[2:end]
+    meta = Dict{Tuple{Vararg{String}},Dict{Symbol,Any}}()
+    for ln in lines[2:end]
+        isempty(strip(ln)) && continue
+        parts = split(ln, ',')
+        length(parts) < 1 && continue
+        raw_path = strip(parts[1])
+        isempty(raw_path) && continue
+        segs = Tuple(filter(!isempty, split(raw_path, '/')))
+        params = Dict{Symbol,Any}()
+        for (i, col) in enumerate(param_cols)
+            idx = i + 1
+            idx > length(parts) && continue
+            cell = parts[idx]
+            val = _infer_meta_value(cell)
+            val === nothing && continue
+            params[Symbol(col)] = val
+        end
+        meta[segs] = params
+    end
+    return meta
+end
+
+# ---------------------------------------------------------------------------
+# Scanning
+# ---------------------------------------------------------------------------
 function scan_directory(root_path::String)::MeasurementHierarchy
     measurements = MeasurementInfo[]
+
+    # load device_info.txt at root level if present
+    meta_path = joinpath(root_path, "device_info.txt")
+    meta = isfile(meta_path) ? _load_device_info_txt(meta_path) : nothing
+
     for (root, dirs, files) in walkdir(root_path)
         for file in files
             if endswith(lowercase(file), ".csv")
                 filepath = joinpath(root, file)
                 try
                     measurement_info = MeasurementInfo(filepath)
+                    # expand (may duplicate)
                     for m in expand_multi_device(measurement_info)
+                        if meta !== nothing
+                            loc_tuple = Tuple(m.device_info.location)
+                            dev_params = get(meta, loc_tuple, nothing)
+                            if dev_params === nothing && !isempty(m.device_info.location)
+                                # leaf fallback
+                                leaf = (last(m.device_info.location),)
+                                dev_params = get(meta, leaf, nothing)
+                            end
+                            if dev_params !== nothing
+                                merge!(m.device_info.parameters, dev_params)
+                            end
+                        end
                         push!(measurements, m)
                     end
                 catch e
@@ -314,13 +418,13 @@ function scan_directory(root_path::String)::MeasurementHierarchy
             end
         end
     end
-    return MeasurementHierarchy(measurements, root_path)
+    return MeasurementHierarchy(measurements, root_path, meta !== nothing)
 end
 
 """
 Get statistics about a set of measurements.
 """
-function get_device_stats(measurements::Vector{MeasurementInfo})
+function get_measurements_stats(measurements::Vector{MeasurementInfo})
     stats = Dict{String,Any}()
     stats["total_measurements"] = length(measurements)
     stats["measurement_types"] = unique([m.measurement_type for m in measurements])

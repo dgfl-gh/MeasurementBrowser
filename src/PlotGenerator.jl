@@ -20,7 +20,7 @@ from the filename alone (no MeasurementInfo dependency), load the data
 with the appropriate reader, and return a Makie Figure. Returns `nothing`
 if unsupported or loading/plotting fails.
 """
-function figure_for_file(path::AbstractString)
+function figure_for_file(path::AbstractString; kwargs...)
     isfile(path) || return nothing
     fname = basename(path)
     dir = dirname(path)
@@ -34,22 +34,22 @@ function figure_for_file(path::AbstractString)
     try
         if occursin("fe pund", lower) || occursin("fepund", lower)
             df = read_fe_pund(fname, dir)
-            fig = plot_fe_pund(df, title)
+            fig = plot_fe_pund(df, title; kwargs...)
         elseif occursin("i_v sweep", lower) || occursin("iv sweep", lower)
             df = read_iv_sweep(fname, dir)
-            fig = plot_iv_sweep_single(df, title)
+            fig = plot_iv_sweep_single(df, title; kwargs...)
         elseif occursin("tlm_4p", lower) || occursin("tlm", lower)
             df = read_tlm_4p(fname, dir)
-            fig = plot_tlm_4p(df, title)
+            fig = plot_tlm_4p(df, title; kwargs...)
         elseif occursin("break", lower) || occursin("breakdown", lower)
             # Treat as breakdown I-V for now
             df = read_iv_sweep(fname, dir)
-            fig = plot_iv_sweep_single(df, title * " (Breakdown)")
+            fig = plot_iv_sweep_single(df, title * " (Breakdown)"; kwargs...)
         else
             # Fallback attempt: try I-V sweep reader
             try
                 df = read_iv_sweep(fname, dir)
-                fig = plot_iv_sweep_single(df, title)
+                fig = plot_iv_sweep_single(df, title; kwargs...)
             catch
                 return nothing
             end
@@ -65,7 +65,7 @@ end
 """
 Plot I-V sweep data for a single DataFrame
 """
-function plot_iv_sweep_single(df, title_str="I-V Sweep")
+function plot_iv_sweep_single(df, title_str="I-V Sweep"; kwargs...)
     if nrow(df) == 0
         return nothing
     end
@@ -154,7 +154,7 @@ end
 """
 Plot FE PUND data with comprehensive visualization
 """
-function plot_fe_pund(df, title_str="FE PUND")
+function plot_fe_pund(df, title_str="FE PUND"; kwargs...)
     if nrow(df) == 0
         return nothing
     end
@@ -203,7 +203,7 @@ end
 """
 Plot TLM 4-point data with detailed analysis
 """
-function plot_tlm_4p(df, title_str="TLM 4-Point")
+function plot_tlm_4p(df, title_str="TLM 4-Point"; kwargs...)
     if nrow(df) == 0
         return nothing
     end

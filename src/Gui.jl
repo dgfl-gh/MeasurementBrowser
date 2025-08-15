@@ -147,14 +147,14 @@ function render_menu_bar(ui_state)
                 path = try
                     String(readchomp(`kdialog --getexistingdirectory`))
                 catch
-                    @error "Failed to open folder selection dialog"
                 end
-                if !isempty(path)
+                if !isnothing(path) && !isempty(path)
                     @info "Selected path: $path"
                     hierarchy = scan_directory(path)
                     ui_state[:hierarchy_root] = hierarchy.root
                     ui_state[:all_measurements] = hierarchy.all_measurements
                     ui_state[:root_path] = path
+                    ui_state[:has_device_metadata] = hierarchy.has_device_metadata
                 end
             end
             ig.EndMenu()
@@ -233,9 +233,9 @@ function _render_hierarchy_tree_panel(ui_state, filter_tree)
         if ig.IsItemClicked() || ig.IsItemFocused()
             ui_state[:selected_path] = full_path
             if is_leaf
-                ui_state[:selected_measurements] = node.measurements
-            elseif haskey(ui_state, :selected_measurements)
-                delete!(ui_state, :selected_measurements)
+                ui_state[:selected_device] = node
+            elseif haskey(ui_state, :selected_device)
+                delete!(ui_state, :selected_device)
             end
         end
         # render children
@@ -275,8 +275,8 @@ function _render_measurements_panel(ui_state, filter_meas)
     )
     ig.ImGuiTextFilter_Draw(filter_meas, "##measurements_filter", -1)
 
-    if haskey(ui_state, :selected_measurements)
-        meas_vec = ui_state[:selected_measurements]
+    if haskey(ui_state, :selected_device)
+        meas_vec = ui_state[:selected_device].measurements
         sel_name = join(get(ui_state, :selected_path, [""]), "/")
         ig.Text("Measurements for $sel_name")
         ig.Separator()
@@ -339,7 +339,7 @@ function render_plot_window(ui_state)
             need_refresh = cached_mtime != mtime
         end
         if need_refresh
-            newfig = figure_for_file(filepath)
+            newfig = figure_for_file(filepath; m.device_info.parameters...)
             @debug "Refreshing plot" newfig
             if newfig !== nothing
                 cache[filepath] = (mtime, newfig)
@@ -372,18 +372,27 @@ end
 
 function render_info_window(ui_state)
     if ig.Begin("Information Panel")
-        ig.Columns(2, "info_cols")
-        if haskey(ui_state, :selected_measurements)
-            meas_vec = ui_state[:selected_measurements]
+        flags = ig.ImGuiTableFlags_Borders | ig.ImGuiTableFlags_RowBg | ig.ImGuiTableFlags_ScrollY
+        ig.BeginTable("info_cols", 2, flags)
+        ig.TableSetupColumn("Device")
+        ig.TableSetupColumn("Measurement")
+        ig.TableHeadersRow()
+        ig.TableNextRow()
+        ig.TableNextColumn()
+
+        if haskey(ui_state, :selected_device)
+            meas_vec = ui_state[:selected_device].measurements
             sel_name = join(get(ui_state, :selected_path, [""]), "/")
-            ig.Text("Device: $sel_name")
-            stats = try
-                get_device_stats(meas_vec)
-            catch err
-                @warn "Failed to compute stats" error = err
-                Dict{String,Any}()
-            end
+            ig.Text("Location: $sel_name")
             ig.Separator()
+            stats = begin
+                try
+                    get_measurements_stats(meas_vec)
+                catch err
+                    @warn "Failed to compute stats" error = err
+                    Dict{String,Any}()
+                end
+            end
             if !isempty(stats)
                 ig.Text("Stats")
                 ig.BulletText("Total: $(stats["total_measurements"])")
@@ -392,46 +401,102 @@ function render_info_window(ui_state)
                     ig.BulletText("First: $(stats["first_measurement"]) ")
                     ig.BulletText("Last:  $(stats["last_measurement"]) ")
                 end
-                if haskey(stats, "parameter_ranges") &&
-                   !isempty(stats["parameter_ranges"])
-                    ig.Separator()
-                    ig.Text("Parameter ranges")
-                    for (p, (mn, mx)) in stats["parameter_ranges"]
-                        ig.BulletText("$(p): $(mn) – $(mx)")
-                    end
-                end
             else
-                ig.Text("No stats available")
+                ig.TextDisabled("No stats available")
+            end
+            ig.Separator()
+            # Device-level metadata
+            if !isempty(meas_vec)
+                dev_meta = first(meas_vec).device_info.parameters
+                if !isempty(dev_meta)
+                    ig.Text("Device metadata")
+                    for (k, v) in dev_meta
+                        ig.BulletText("$(k): $(v)")
+                    end
+                else
+                    ig.TextDisabled("No metadata parameters found")
+                end
             end
         else
-            ig.Text("Select a device to see details")
+            ig.TextDisabled("Select a device to see details")
         end
 
-        ig.NextColumn()
+        ig.TableNextColumn()
         if haskey(ui_state, :selected_measurement)
             m = ui_state[:selected_measurement]
-            ig.Text("Selected Measurement")
+            ig.Text("Title: $(m.clean_title)")
             ig.Separator()
-            ig.BulletText("Title: $(m.clean_title)")
             ig.BulletText("Type: $(m.measurement_type)")
             ig.BulletText("Timestamp: $(m.timestamp)")
-            # ig.BulletText("Filename: $(m.filename)");
-            # ig.BulletText("Path: $(m.filepath)")
             ig.BulletText("Filename:")
             ig.SameLine()
             ig.TextLinkOpenURL(m.filename, m.filepath)
+            ig.Separator()
             if !isempty(m.parameters)
-                ig.Separator()
                 ig.Text("Parameters")
                 for (k, v) in m.parameters
                     ig.BulletText("$(k) = $(v)")
                 end
+            else
+                ig.TextDisabled("No parameters extracted")
             end
+
         else
-            ig.Text("Select a measurement to view details")
+            ig.TextDisabled("Select a measurement to view details")
         end
+        ig.EndTable()
     end
     ig.End()
+end
+
+# ------------------------------------------------------------------
+# Modal for missing device metadata (shown each scan when missing)
+# ------------------------------------------------------------------
+function render_device_info_modal(ui_state)
+    # Reset dismissal when root path changes
+    current_root = get(ui_state, :root_path, "")
+    if get(ui_state, :_modal_last_root_path, "") != current_root
+        ui_state[:_modal_last_root_path] = current_root
+        ui_state[:dev_info_modal] = true
+    end
+    # always center
+    center = ig.ImVec2(0.5, 0.5)
+    @c ig.ImGuiViewport_GetCenter(&center, ig.GetMainViewport())
+    ig.SetNextWindowPos(center, ig.ImGuiCond_Always, (0.5, 0.5))
+
+    # Show modal if: missing metadata and user hasn't dismissed it this scan
+    if get(ui_state, :dev_info_modal, true) && !get(ui_state, :has_device_metadata, true)
+        ig.OpenPopup("Device Metadata Missing")
+    end
+
+    opened = get(ui_state, :dev_info_modal, true)
+
+    if @c ig.BeginPopupModal("Device Metadata Missing", &opened, ig.ImGuiWindowFlags_AlwaysAutoResize)
+        ig.Text("No device metadata file (device_info.csv) was found.")
+        ig.Separator()
+        ig.TextWrapped("Create a simple CSV file named device_info.csv in the TOP folder you opened to add extra info (area, thickness, notes, etc.) for each device.")
+        ig.Spacing()
+        ig.TextWrapped("How to do it:")
+        ig.BulletText("Create a new text file: device_info.txt")
+        ig.BulletText("First line (header): device_path, area_um2, thickness_nm, ...")
+        ig.BulletText("Add a column for each property you want to track.")
+        ig.BulletText("Add one line per device. device_path can be just a name (A1) or a full path (CHIP1/SITE1/A2)")
+        ig.BulletText("A full path entry overrides a simple name entry for the same leaf.")
+        ig.Spacing()
+        ig.TextDisabled("Example:")
+        ig.TextDisabled("device,   area_um2,   thickness_nm,   notes,   active")
+        ig.TextDisabled("A1,    12.5,   7.0,   baseline,   true")
+        ig.TextDisabled("CHIP1/SITE1/A2,    12.4,   7.0,   override,  true")
+        ig.Spacing()
+        ig.TextWrapped("Save the file, then rescan or reopen the folder to load these values.")
+        ig.Spacing()
+        if ig.Button("Got it")
+            opened = false
+            ig.CloseCurrentPopup()
+        end
+        ig.EndPopup()
+    end
+    ui_state[:dev_info_modal] = opened
 end
 
 function create_window_and_run_loop(root_path::Union{Nothing,String}=nothing; engine=nothing, spawn=1)
@@ -449,6 +514,7 @@ function create_window_and_run_loop(root_path::Union{Nothing,String}=nothing; en
         ui_state[:hierarchy_root] = hierarchy.root
         ui_state[:all_measurements] = hierarchy.all_measurements
         ui_state[:root_path] = root_path
+        ui_state[:has_device_metadata] = hierarchy.has_device_metadata
     end
     first_frame = Ref(true)
     ig.render(
@@ -465,12 +531,13 @@ function create_window_and_run_loop(root_path::Union{Nothing,String}=nothing; en
         if first_frame[] && !haskey(ui_state, :_gl_info)
             ui_state[:_gl_info] = _collect_gl_info!()
             first_frame[] = false
-            try
-                GLFW.SwapInterval(0)  # disable vsync
-            catch err
-                @warn "Failed to disable vsync" error = err
-            end
+            # try
+            #     GLFW.SwapInterval(0)  # disable vsync
+            # catch err
+            #     @warn "Failed to disable vsync" error = err
+            # end
         end
+        ig.DockSpaceOverViewport(0, ig.GetMainViewport())
         _time!(ui_state, :device_tree) do
             render_selection_window(ui_state)
         end
@@ -483,6 +550,8 @@ function create_window_and_run_loop(root_path::Union{Nothing,String}=nothing; en
         _time!(ui_state, :perf_window) do
             render_perf_window(ui_state)
         end
+        # Show metadata guidance modal if needed
+        render_device_info_modal(ui_state)
     end
 end
 
