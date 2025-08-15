@@ -11,6 +11,9 @@ using Statistics: mean
 include("MakieIntegration.jl")
 using .MakieImguiIntegration
 
+include("PlotGenerator.jl")
+using .PlotGenerator
+
 # Timing & allocation utilities
 # usage: _time!(ui_state, :key) do ... end
 function _time!(f::Function, ui_state, key::Symbol)
