@@ -154,7 +154,7 @@ end
 """
 Plot FE PUND data with comprehensive visualization
 """
-function plot_fe_pund(df, title_str="FE PUND"; kwargs...)
+function plot_fe_pund(df, title_str="FE PUND"; area_um2=nothing, kwargs...)
     if nrow(df) == 0
         return nothing
     end
@@ -165,10 +165,10 @@ function plot_fe_pund(df, title_str="FE PUND"; kwargs...)
     fig = Figure(size=(1200, 800))
 
     # create axes
-    ax1 = Axis(fig[1, 1:2], xlabel="Time (μs)", ylabel="Current (μA)", yticklabelcolor=:blue, title="$title_str - Combined")
+    ax1 = Axis(fig[1, 1:2], xlabel="Time (μs)", ylabel="Current (μA)", yticklabelcolor=:blue, title="$title_str - Area = $(isnothing(area_um2) ? "?" : round(area_um2, digits=2)) um²")
     ax1twin = Axis(fig[1, 1:2], yaxisposition=:right, ylabel="Voltage (V)", yticklabelcolor=:red)
     ax2 = Axis(fig[2, 1], xlabel="Voltage (V)", ylabel="Current (μA)", title="$title_str - I-V Characteristic")
-    ax3 = Axis(fig[2, 2], xlabel="Voltage (V)", ylabel="Charge (pC)", title="$title_str - Ferroelectric Switching Charge")
+    ax3 = Axis(fig[2, 2], xlabel="Voltage (V)", ylabel="Switching Charge (pC)", title="$title_str - Ferroelectric Switching Charge")
     linkaxes!(ax1, ax1twin)
 
     # Combined I, V plot
@@ -182,13 +182,24 @@ function plot_fe_pund(df, title_str="FE PUND"; kwargs...)
 
     # Remant charge - align P and N pulses
     Q_FE = df.Q_FE .- mean(filter(!isnan, df.Q_FE))
+    # Remnant polarization - divide by area (um² -> cm²)
+    if !isnothing(area_um2)
+        area_cm2 = area_um2 / 1e8  # convert from um² to cm²
+        label = "Remnant Polarization (μC/cm²)"
+        ax3.ylabel = label
+        P_FE = Q_FE / area_cm2
+    end
 
     # Plot each PUND repetition separately for legend
     for rep in 1:maximum(df.pulse_idx)÷5
         pulse_range = (rep-1)*5+1:rep*5
         mask = [p in pulse_range for p in df.pulse_idx]
         if any(mask)
-            lines!(ax3, df.voltage[mask], Q_FE[mask] * 1e12, linewidth=2, color=:purple, label="$rep")
+            if !isnothing(area_um2)
+                lines!(ax3, df.voltage[mask], P_FE[mask] * 1e6, linewidth=2, color=:purple, label="$rep")
+            else
+                lines!(ax3, df.voltage[mask], Q_FE[mask] * 1e12, linewidth=2, color=:purple, label="$rep")
+            end
         end
     end
 
