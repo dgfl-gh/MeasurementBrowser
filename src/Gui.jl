@@ -336,6 +336,20 @@ function _render_measurements_panel(ui_state, filter_meas)
             if ig.Selectable(meas_id(m), selected)
                 ui_state[:selected_measurement] = m
             end
+            # Right-click context menu per measurement entry
+            if ig.BeginPopupContextItem()
+                if ig.MenuItem("Open Plot in New Window")
+                    open_plots = get!(ui_state, :open_plot_windows) do
+                        Vector{Dict{Symbol,Any}}()
+                    end
+                    push!(open_plots, Dict(
+                        :filepath => m.filepath,
+                        :title => m.clean_title,
+                        :params => deepcopy(m.device_info.parameters),
+                    ))
+                end
+                ig.EndPopup()
+            end
         end
         !any_shown && ig.TextDisabled("No measurements match filter")
     else
@@ -363,35 +377,38 @@ function render_selection_window(ui_state)
     ig.End()
 end
 
-function render_plot_window(ui_state)
-    # Figure cache: filepath => (mtime, Figure)
-    cache = get!(ui_state, :_plot_cache) do
-        Dict{String,Tuple{DateTime,Figure}}()
+# Unified helper: ensure (and cache) a Figure for a filepath with params
+function _ensure_plot_figure(ui_state, filepath; params...)
+    # Produce a fresh Figure every time this is called (caller controls call frequency).
+    # Avoid caching and reusing the same Figure object across multiple ImGui/Makie
+    # windows because sharing a single GLMakie.Figure/Screen texture in multiple
+    # ImGui contexts can trigger crashes.
+    isfile(filepath) || return nothing
+    try
+        return figure_for_file(filepath; params...)
+    catch err
+        @warn "figure_for_file failed" filepath error = err
+        return nothing
     end
+end
+
+function render_plot_window(ui_state)
     m = get(ui_state, :selected_measurement, nothing)
     if m !== nothing
         filepath = m.filepath
-        last_path = get(ui_state, :_last_plotted_path, nothing)
-        # Determine modification time
         mtime = Dates.unix2datetime(stat(filepath).mtime)
-        need_refresh = false
-        if last_path !== filepath || !haskey(cache, filepath)
-            need_refresh = true
-            @debug "refreshing plot" need_refresh last_path filepath
-        else
-            cached_mtime, _ = cache[filepath]
-            need_refresh = cached_mtime != mtime
-        end
-        if need_refresh
-            newfig = figure_for_file(filepath; m.device_info.parameters...)
-            @debug "Refreshing plot" newfig
-            if newfig !== nothing
-                cache[filepath] = (mtime, newfig)
-                ui_state[:plot_figure] = newfig
+        last_path = get(ui_state, :_last_plotted_path, nothing)
+        last_mtime = get(ui_state, :_last_plotted_mtime, nothing)
+        if filepath != last_path || mtime != last_mtime
+            fig = _ensure_plot_figure(ui_state, filepath; m.device_info.parameters...)
+            if fig !== nothing
+                ui_state[:plot_figure] = fig
                 ui_state[:_last_plotted_path] = filepath
+                ui_state[:_last_plotted_mtime] = mtime
             else
                 delete!(ui_state, :plot_figure)
                 delete!(ui_state, :_last_plotted_path)
+                delete!(ui_state, :_last_plotted_mtime)
             end
         end
     end
@@ -402,13 +419,11 @@ function render_plot_window(ui_state)
                 MakieFigure("measurement_plot", f; auto_resize_x=true, auto_resize_y=true)
             end
         else
-            ig.Text("No plot available")
+            ig.Text("Plot failed to generate")
         end
         ig.Separator()
         if m === nothing
             ig.TextDisabled("Select a measurement to generate a plot")
-        else
-            ig.TextDisabled(basename(m.filepath))
         end
     end
     ig.End()
@@ -543,6 +558,53 @@ function render_device_info_modal(ui_state)
     ui_state[:dev_info_modal] = opened
 end
 
+# Render any additional plot windows opened via right-click context menu.
+function render_additional_plot_windows(ui_state)
+    open_plots = get(ui_state, :open_plot_windows, nothing)
+    open_plots === nothing && return
+    isempty(open_plots) && return
+    to_keep = Vector{Dict{Symbol,Any}}()
+    for entry in open_plots
+        filepath = get(entry, :filepath, "")
+        isempty(filepath) && continue
+        if !isfile(filepath)
+            continue
+        end
+        title = get(entry, :title, basename(filepath))
+        # Refresh / create figure (per-window; no global shared Figure)
+        mtime = Dates.unix2datetime(stat(filepath).mtime)
+        existing_mtime = get(entry, :mtime, nothing)
+        refresh = !haskey(entry, :figure) || existing_mtime != mtime
+        if refresh
+            fig = haskey(entry, :params) ?
+                  _ensure_plot_figure(ui_state, filepath; entry[:params]...) :
+                  _ensure_plot_figure(ui_state, filepath)
+            fig === nothing && continue
+            entry[:figure] = fig
+            entry[:mtime] = mtime
+        end
+        # Window (allow user to close)
+        open_ref = Ref(true)
+        if ig.Begin("Plot: $title###plot_window_$filepath", open_ref)
+            if haskey(entry, :figure)
+                f = entry[:figure]
+                # Sanitize id for ImGui (avoid slashes)
+                id_str = replace(filepath, '/' => '_')
+                _time!(ui_state, :makie_fig) do
+                    MakieFigure("measurement_plot_$id_str", f; auto_resize_x=true, auto_resize_y=true)
+                end
+            else
+                ig.Text("No plot available")
+            end
+            ig.Separator()
+            ig.TextDisabled(basename(filepath))
+        end
+        ig.End()
+        open_ref[] && push!(to_keep, entry)
+    end
+    ui_state[:open_plot_windows] = to_keep
+end
+
 function create_window_and_run_loop(root_path::Union{Nothing,String}=nothing; engine=nothing, spawn=1)
     ig.set_backend(:GlfwOpenGL3)
     ui_state = Dict{Symbol,Any}()
@@ -597,6 +659,9 @@ function create_window_and_run_loop(root_path::Union{Nothing,String}=nothing; en
         end
         _time!(ui_state, :plot) do
             render_plot_window(ui_state)
+        end
+        _time!(ui_state, :extra_plots) do
+            render_additional_plot_windows(ui_state)
         end
         _time!(ui_state, :perf_window) do
             render_perf_window(ui_state)
