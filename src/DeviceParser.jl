@@ -182,6 +182,42 @@ function parse_parameters(filename::String)
 end
 
 function meas_id(meas::MeasurementInfo)
+    if meas.measurement_type == "Wakeup"
+        try
+            # Read wakeup file to get pulse count
+            lines = readlines(meas.filepath)
+            data_start = 1
+            for (i, line) in enumerate(lines)
+                if occursin("Time,MeasResult1_value,MeasResult2_value", line)
+                    data_start = i + 1
+                    break
+                end
+            end
+            data_lines = 0
+            for line in lines[data_start:end]
+                if !isempty(strip(line)) && occursin(',', line)
+                    data_lines += 1
+                end
+            end
+            if data_lines > 0
+                return "$(meas.timestamp) $(meas.measurement_type) $(data_lines)×"
+            end
+        catch
+            # If reading fails, fall back to default
+        end
+    elseif meas.measurement_type == "FE PUND"
+        try
+            # Extract voltage amplitude from filename
+            amplitude_match = match(r"(\d+(?:\.\d+)?)V", meas.filename)
+            if amplitude_match !== nothing
+                voltage = parse(Float64, amplitude_match.captures[1])
+                voltage_str = voltage == floor(voltage) ? "$(Int(voltage))V" : "$(voltage)V"
+                return "$(meas.timestamp) $(meas.measurement_type) $(voltage_str)"
+            end
+        catch
+            # If reading fails, fall back to default
+        end
+    end
     return "$(meas.timestamp) $(meas.measurement_type)"
 end
 

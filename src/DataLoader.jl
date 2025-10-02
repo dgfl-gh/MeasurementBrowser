@@ -177,6 +177,38 @@ function read_tlm_4p(filename, workdir=".")
 end
 
 """
+Read wakeup data from CSV file - counts lines and extracts amplitude from filename
+Returns DataFrame with pulse_count and amplitude
+"""
+function read_wakeup(filename, workdir=".")
+    filepath = joinpath(workdir, filename)
+    lines = readlines(filepath)
+
+    # Find the header line that contains "Time,MeasResult1_value,MeasResult2_value"
+    data_start = 1
+    for (i, line) in enumerate(lines)
+        if occursin("Time,MeasResult1_value,MeasResult2_value", line)
+            data_start = i + 1
+            break
+        end
+    end
+
+    # Count actual data lines (non-empty lines with commas after the header)
+    data_lines = 0
+    for line in lines[data_start:end]
+        if !isempty(strip(line)) && occursin(',', line)
+            data_lines += 1
+        end
+    end
+
+    # Extract amplitude from filename (pattern like "3V", "10V", etc.)
+    amplitude_match = match(r"(\d+(?:\.\d+)?)V", filename)
+    amplitude = amplitude_match !== nothing ? parse(Float64, amplitude_match.captures[1]) : 0.0
+
+    return DataFrame(pulse_count=data_lines, amplitude=amplitude)
+end
+
+"""
 Extract datetime from filename in format: [... ; YYYY-MM-DD HH_MM_SS].csv
 Returns DateTime object or nothing if parsing fails
 """

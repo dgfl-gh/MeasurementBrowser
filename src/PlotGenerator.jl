@@ -6,7 +6,7 @@ using Statistics
 using PrecompileTools: @setup_workload, @compile_workload
 
 include("DataLoader.jl")
-using .DataLoader
+using .DataLoader: read_iv_sweep, read_fe_pund, read_tlm_4p, read_wakeup
 include("DataAnalysis.jl")
 using .Analysis
 
@@ -45,6 +45,9 @@ function figure_for_file(path::AbstractString; kwargs...)
             # Treat as breakdown I-V for now
             df = read_iv_sweep(fname, dir)
             fig = plot_iv_sweep_single(df, title * " (Breakdown)"; kwargs...)
+        elseif occursin("wakeup", lower)
+            df = read_wakeup(fname, dir)
+            fig = plot_wakeup(df, title; kwargs...)
         else
             # Fallback attempt: try I-V sweep reader
             try
@@ -213,6 +216,36 @@ function plot_fe_pund(df, title_str="FE PUND"; area_um2=nothing, kwargs...)
     return fig
 end
 
+
+"""
+Plot wakeup data showing pulse count and amplitude as text
+"""
+function plot_wakeup(df, title_str="Wakeup"; kwargs...)
+    if nrow(df) == 0
+        return nothing
+    end
+
+    pulse_count = df.pulse_count[1]
+    amplitude = df.amplitude[1]
+
+    fig = Figure(size=(600, 400))
+    ax = Axis(fig[1, 1], title=title_str)
+
+    # Hide axis elements since we only want to show text
+    hidedecorations!(ax)
+    hidespines!(ax)
+
+    # Display the pulse count and amplitude as text
+    text_content = "$(pulse_count)× wakeup pulses\namplitude = $(amplitude) V"
+    text!(ax, 0.5, 0.5, text=text_content, align=(:center, :center),
+        fontsize=24, color=:black)
+
+    # Set axis limits to center the text
+    xlims!(ax, 0, 1)
+    ylims!(ax, 0, 1)
+
+    return fig
+end
 
 """
 Plot TLM 4-point data with detailed analysis
