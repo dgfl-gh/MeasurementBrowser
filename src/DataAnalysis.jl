@@ -66,7 +66,7 @@ function analyze_pund(df::DataFrame)
     # ---- pulse detection ---------------------------------------------------------------
     # Use smoothed derivative detection to capture full triangular pulses
     dV = smoothdata([0.0; diff(V)], :movmedian, 9)
-    baseline_dV = std(dV[1:min(75, length(dV) ÷ 10)])
+    baseline_dV = std(dV[1:min(10, length(dV) ÷ 10)])
     dV_threshold = baseline_dV * 5
     # Find regions with significant voltage changes
     pulse_mask = abs.(dV) .> dV_threshold
@@ -82,8 +82,8 @@ function analyze_pund(df::DataFrame)
     all_pulses = true_runs(expanded_mask)
 
     # Filter out short pulses and pulses with small voltage amplitudes
-    baseline_V = mean(abs.(V[1:min(100, length(V))]))
-    min_pulse_length = 100  # minimum points for a valid pulse
+    baseline_V = mean(abs.(V[1:min(9, length(V))]))
+    min_pulse_length = 20  # minimum points for a valid pulse
     min_voltage_amplitude = baseline_V * 5  # minimum voltage amplitude
 
     pulses = UnitRange{Int}[]

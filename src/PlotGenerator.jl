@@ -73,11 +73,15 @@ function plot_iv_sweep_single(df, title_str="I-V Sweep"; kwargs...)
     fig = Figure(size=(800, 600))
     ax = Axis(fig[1, 1], xlabel="Voltage (V)", ylabel="Current (A)", title=title_str)
 
-    lines!(ax, df.voltage, df.current1, color=:blue, linewidth=2, label="Current1")
-    if hasproperty(df, :current2) && any(df.current1 .!= df.current2)
-        lines!(ax, df.voltage, df.current2, color=:red, linewidth=2, label="Current2")
-        axislegend(ax, position=:rt)
-    end
+    vpos = df.v[df.i.>0]
+    vneg = df.v[df.i.<0]
+    ipos = df.i[df.i.>0]
+    ineg = df.i[df.i.<0]
+
+    lines!(ax, vpos, ipos, color=:blue, linewidth=2)
+    scatter!(ax, vneg, abs.(ineg), color=:red)
+
+    ax.yscale = log10
 
     return fig
 end
@@ -169,7 +173,6 @@ function plot_fe_pund(df, title_str="FE PUND"; area_um2=nothing, kwargs...)
     ax1twin = Axis(fig[1, 1:2], yaxisposition=:right, ylabel="Voltage (V)", yticklabelcolor=:red)
     ax2 = Axis(fig[2, 1], xlabel="Voltage (V)", ylabel="Current (μA)", title="$title_str - I-V Characteristic")
     ax3 = Axis(fig[2, 2], xlabel="Voltage (V)", ylabel="Switching Charge (pC)", title="$title_str - Ferroelectric Switching Charge")
-    linkaxes!(ax1, ax1twin)
 
     # Combined I, V plot
     l1 = lines!(ax1, time_us, df.current * 1e6, color=:blue, linewidth=2)

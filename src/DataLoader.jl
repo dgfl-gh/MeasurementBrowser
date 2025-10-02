@@ -45,19 +45,28 @@ function read_iv_sweep(filename, workdir=".")
         end
     end
 
+    header_cols = split(lines[data_start-1], ',')
     data_lines = lines[data_start:end]
     voltage = Float64[]
-    current1 = Float64[]
-    current2 = Float64[]
+    current = Float64[]
 
+    # check if header line contains expected columns
+    # it's enough that there's a column containing "V" and one containing "I"
+    if !any(occursin.("V", header_cols)) && !any(occursin.("I", header_cols))
+        error("Invalid column names")
+    end
+
+    v_idx = findfirst(contains.(header_cols, "V"))
+    i_idx = findfirst(contains.(header_cols, "I"))
+
+    # parse data lines
     for line in data_lines
         if !isempty(strip(line))
             parts = split(line, ',')
-            if length(parts) >= 3
+            if length(parts) >= 2
                 try
-                    push!(voltage, parse(Float64, parts[1]))
-                    push!(current1, parse(Float64, parts[2]))
-                    push!(current2, parse(Float64, parts[3]))
+                    push!(voltage, parse(Float64, parts[v_idx]))
+                    push!(current, parse(Float64, parts[i_idx]))
                 catch
                     continue
                 end
@@ -65,7 +74,7 @@ function read_iv_sweep(filename, workdir=".")
         end
     end
 
-    return DataFrame(voltage=voltage, current1=current1, current2=current2)
+    return DataFrame(v=voltage, i=current)
 end
 
 """

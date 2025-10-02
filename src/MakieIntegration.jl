@@ -110,9 +110,13 @@ function draw_axisscale_buttons(scale, ticks, idx)
         scale[] = identity
     end
     ig.SameLine()
-    if ig.RadioButton("log10##$(idx)", scale[] === Makie.pseudolog10)
+    if ig.RadioButton("pseudolog10##$(idx)", scale[] === Makie.pseudolog10)
         scale[] = Makie.pseudolog10
         # ticks[] = Makie.LogTicks(Makie.LinearTicks(5))
+    end
+    ig.SameLine()
+    if ig.RadioButton("log10##$(idx)", scale[] === log10)
+        scale[] = log10
     end
 end
 
