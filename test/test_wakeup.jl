@@ -109,8 +109,6 @@ using .PlotGenerator: plot_wakeup, figure_for_file
             meas_info = MeasurementInfo(wakeup_path)
 
             @test meas_info.measurement_type == "Wakeup"
-            @test occursin("Wakeup", meas_info.clean_title)
-            @test occursin("A9_VI_D1", meas_info.clean_title)
 
             # Test that the clean title follows expected pattern (original format with device info)
             expected_title = "Wakeup A9_VI_D1 2025-10-01"
