@@ -8,9 +8,9 @@ using PrecompileTools: @setup_workload, @compile_workload
 include("DataLoader.jl")
 using .DataLoader: read_iv_sweep, read_fe_pund, read_tlm_4p, read_wakeup
 include("DataAnalysis.jl")
-using .Analysis
+using .Analysis: analyze_breakdown, analyze_pund, extract_tlm_geometry_from_params, analyze_tlm_combined, calculate_sheet_resistance
 
-export figure_for_file, figure_for_files, plot_tlm_combined, plot_pund_fatigue
+export figure_for_file, figure_for_files, plot_tlm_combined, plot_pund_fatigue, get_combined_plot_types
 
 """
     figure_for_file(path::AbstractString; kind::Union{Symbol,Nothing}=nothing) -> Union{Figure,Nothing}
@@ -67,20 +67,31 @@ function figure_for_file(path::AbstractString, kind::Union{Symbol,Nothing}; kwar
 end
 
 """
-    figure_for_files(paths::Vector{String}, combined_kind::Symbol; kwargs...) -> Union{Figure,Nothing}
+Available combined plot types - easily extensible
+"""
+function get_combined_plot_types()
+    return [
+        (nothing, "None", "No combined plot selected"),
+        (:tlm_analysis, "TLM Analysis", "Width-normalized resistance vs length from multiple TLM 4-point measurements"),
+        (:pund_fatigue, "PUND Fatigue", "P-E curve evolution or remnant polarization vs fatigue cycles from PUND measurements"),
+    ]
+end
 
-Given a vector of filepaths to measurement CSVs and a combined plot type,
+"""
+    figure_for_files(paths::Vector{String}, combined_kind::Symbol; device_params_list=[], kwargs...) -> Union{Figure,Nothing}
+
+Given a vector of file paths, a combined plot type, and device parameters,
 load the data and return a combined Makie Figure. Returns `nothing`
 if unsupported or loading/plotting fails.
 """
-function figure_for_files(paths::Vector{String}, combined_kind::Symbol; kwargs...)
+function figure_for_files(paths::Vector{String}, combined_kind::Symbol; device_params_list::Vector{Dict{Symbol,Any}}=Dict{Symbol,Any}[], kwargs...)
     isempty(paths) && return nothing
 
     try
         if combined_kind === :tlm_analysis
-            return plot_tlm_combined(paths; kwargs...)
+            return plot_tlm_combined(paths; device_params_list=device_params_list, kwargs...)
         elseif combined_kind === :pund_fatigue
-            return plot_pund_fatigue(paths; kwargs...)
+            return plot_pund_fatigue(paths; device_params_list=device_params_list, kwargs...)
         else
             @warn "figure_for_files: Unknown combined plot kind: $combined_kind"
             return nothing
@@ -94,27 +105,153 @@ end
 """
 Plot combined TLM analysis showing width-normalized resistance vs length
 """
-function plot_tlm_combined(paths::Vector{String}; kwargs...)
+function plot_tlm_combined(paths::Vector{String}; device_params_list::Vector{Dict{Symbol,Any}}=Dict{Symbol,Any}[], kwargs...)
     @info "plot_tlm_combined called with $(length(paths)) files"
 
-    # TODO: Implement TLM combined analysis
-    # 1. Load all TLM files
-    # 2. Extract geometries from filenames (W2, W4, etc.)
-    # 3. Calculate width-normalized resistance
-    # 4. Create R vs L plot
+    if isempty(paths)
+        @warn "No files provided for TLM combined analysis"
+        return nothing
+    end
 
-    # Placeholder implementation
-    fig = Figure(size=(800, 600))
-    ax = Axis(fig[1, 1],
+    # Load all TLM files
+    files_data_params = Tuple{String, DataFrame, Dict{Symbol,Any}}[]
+    for (i, path) in enumerate(paths)
+        try
+            filename = basename(path)
+            dirname_path = dirname(path)
+            df = read_tlm_4p(filename, dirname_path)
+
+            # Get device parameters if provided
+            device_params = if i <= length(device_params_list)
+                device_params_list[i]
+            else
+                Dict{Symbol,Any}()
+            end
+
+            push!(files_data_params, (path, df, device_params))
+        catch err
+            @warn "Failed to load TLM file: $path" error = err
+        end
+    end
+
+    if isempty(files_data_params)
+        @warn "No valid TLM files could be loaded"
+        return nothing
+    end
+
+    # Perform combined analysis
+    analysis_df = analyze_tlm_combined(files_data_params)
+
+    if nrow(analysis_df) == 0
+        @warn "TLM combined analysis produced no data"
+        return nothing
+    end
+
+    # Calculate sheet resistance
+    sheet_res, contact_res, r_squared = calculate_sheet_resistance(analysis_df)
+
+    # Create the plot with two subplots
+    fig = Figure(size=(900, 600))
+
+    # Main plot: Resistance vs Length/Width
+    ax1 = Axis(fig[1, 1:2],
+        xlabel="Length/Width Ratio (L/W)",
+        ylabel="Resistance (kΩ)",
+        title="TLM Analysis - Sheet Resistance Extraction")
+
+    # Secondary plot: Width-normalized resistance vs length
+    ax2 = Axis(fig[2, 1],
         xlabel="Length (μm)",
         ylabel="Width-Normalized Resistance (Ω·μm)",
-        title="TLM Analysis - Combined Plot")
+        title="Width-Normalized Resistance vs Length")
 
-    text!(ax, 0.5, 0.5, text="TLM Combined Plot\nNot Yet Implemented",
-        align=(:center, :center), fontsize=20, color=:red)
+    # Info panel
+    info_ax = Axis(fig[2, 2],
+        xlabel="", ylabel="", title="Analysis Results")
+    hidedecorations!(info_ax)
+    hidespines!(info_ax)
 
-    xlims!(ax, 0, 1)
-    ylims!(ax, 0, 1)
+    # Group by device for plotting
+    devices = unique(analysis_df.device_name)
+    colors = cgrad(:tab10, length(devices), categorical=true)
+
+    # Plot 1: R vs L/W for sheet resistance extraction
+    geometry_groups = combine(groupby(analysis_df, [:length_um, :width_um, :device_name]),
+                             :resistance_ohm => (x -> mean(filter(isfinite, x))) => :avg_resistance_ohm)
+
+    valid_geom_mask = isfinite.(geometry_groups.avg_resistance_ohm) .&
+                     isfinite.(geometry_groups.length_um) .&
+                     isfinite.(geometry_groups.width_um) .&
+                     (geometry_groups.width_um .> 0)
+
+    valid_geometry = geometry_groups[valid_geom_mask, :]
+
+    if nrow(valid_geometry) > 0
+        lw_ratio = valid_geometry.length_um ./ valid_geometry.width_um
+
+        # Plot data points
+        for (i, device) in enumerate(devices)
+            device_geom = filter(row -> row.device_name == device, valid_geometry)
+            if nrow(device_geom) > 0
+                device_lw = device_geom.length_um ./ device_geom.width_um
+                scatter!(ax1, device_lw, device_geom.avg_resistance_ohm./1e3,
+                        color=colors[i], label=device, markersize=10)
+            end
+        end
+
+        # Add linear fit line if sheet resistance is valid
+        if isfinite(sheet_res) && isfinite(contact_res)
+            lw_range = extrema(lw_ratio)
+            lw_fit = range(0, lw_range[2], length=100)
+            r_fit = (contact_res .+ sheet_res .* lw_fit)./1e3
+            lines!(ax1, lw_fit, r_fit, color=:red, linewidth=2,
+                  label="Linear Fit", linestyle=:dash)
+        end
+    end
+
+    # Plot 2: Width-normalized resistance vs length
+    for (i, device) in enumerate(devices)
+        device_data = filter(row -> row.device_name == device, analysis_df)
+
+        # Filter out infinite and NaN values
+        valid_mask = isfinite.(device_data.resistance_normalized) .&
+                    isfinite.(device_data.length_um)
+
+        if sum(valid_mask) > 0
+            valid_data = device_data[valid_mask, :]
+            scatter!(ax2, valid_data.length_um, valid_data.resistance_normalized,
+                    color=colors[i], label=device, markersize=6)
+        end
+    end
+
+    # Display analysis results in info panel
+    results_text = ""
+    if isfinite(sheet_res)
+        results_text *= "Sheet Resistance:\n"
+        results_text *= "  $(round(sheet_res, digits=2)) Ω/□\n\n"
+        results_text *= "Contact Resistance:\n"
+        results_text *= "  $(round(contact_res, digits=2)) Ω\n\n"
+        results_text *= "R² = $(round(r_squared, digits=4))\n\n"
+    else
+        results_text *= "Sheet Resistance:\n"
+        results_text *= "  Unable to calculate\n"
+        results_text *= "  (need ≥2 geometries)\n\n"
+    end
+    results_text *= "Files analyzed: $(length(files_data_params))\n"
+    results_text *= "Devices: $(length(devices))\n"
+    results_text *= "Data points: $(nrow(analysis_df))"
+
+    text!(info_ax, 0.05, 0.95, text=results_text,
+          align=(:left, :top), fontsize=16, space=:relative)
+
+    # Add legends
+    if length(devices) > 1
+        axislegend(ax1, position=:lt)
+    end
+
+    # Set reasonable axis limits
+    xlims!(info_ax, 0, 1)
+    ylims!(info_ax, 0, 1)
 
     return fig
 end
@@ -122,7 +259,7 @@ end
 """
 Plot PUND fatigue analysis showing either overlapped P-E curves or fatigue evolution
 """
-function plot_pund_fatigue(paths::Vector{String}; mode=:overlapped, kwargs...)
+function plot_pund_fatigue(paths::Vector{String}; device_params_list::Vector{Dict{Symbol,Any}}=Dict{Symbol,Any}[], mode=:overlapped, kwargs...)
     @info "plot_pund_fatigue called with $(length(paths)) files, mode=$mode"
 
     # TODO: Implement PUND fatigue analysis

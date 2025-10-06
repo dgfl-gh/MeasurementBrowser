@@ -180,11 +180,11 @@ function detect_measurement_kind(filename::String)::Symbol
 end
 
 function measurement_label(kind::Symbol)::String
-    kind === :pund      && return "FE PUND"
-    kind === :iv        && return "I-V Sweep"
-    kind === :tlm4p     && return "TLM 4-Point"
+    kind === :pund && return "FE PUND"
+    kind === :iv && return "I-V Sweep"
+    kind === :tlm4p && return "TLM 4-Point"
     kind === :breakdown && return "Breakdown"
-    kind === :wakeup    && return "Wakeup"
+    kind === :wakeup && return "Wakeup"
     return "Unknown"
 end
 
@@ -405,6 +405,18 @@ end
 
 Reads device_info.txt where first column is `device_path` (slash-separated),
 remaining columns are arbitrary device-level parameters.
+
+Example device_info.txt format for TLM measurements:
+```
+device_path,length_um,width_um,area_um2,notes
+TLML800W2,800,2,1600,TLM structure L800 W2
+TLML800W4,800,4,3200,TLM structure L800 W4
+TLML400W2,400,2,800,TLM structure L400 W2
+TLML400W4,400,4,1600,TLM structure L400 W4
+```
+
+For TLM combined analysis, the length_um and width_um parameters are required
+to calculate width-normalized resistance and extract sheet resistance.
 """
 function _load_device_info_txt(path::AbstractString)
     lines = readlines(path)

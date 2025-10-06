@@ -4,7 +4,7 @@ using DataFrames
 using Dates
 using Statistics, SmoothData
 
-export analyze_breakdown, analyze_pund
+export analyze_breakdown, analyze_pund, extract_tlm_geometry_from_params, analyze_tlm_combined
 
 """
 Simple breakdown analysis for I-V data
@@ -48,7 +48,7 @@ function analyze_pund(df::DataFrame; DEBUG::Bool=false)
     n0 = min(10, N)
     baseline_I = mean(skipmissing(filter(!isnan, I[1:n0])))
     if DEBUG
-        @info "analyze_pund: baseline current offset" n0=n0 baseline=baseline_I
+        @info "analyze_pund: baseline current offset" n0 = n0 baseline = baseline_I
     end
     I .-= baseline_I
 
@@ -185,6 +185,249 @@ function analyze_pund(df::DataFrame; DEBUG::Bool=false)
     # ---- assemble and return -----------------------------------------------------------
     df[!, :current] .= I # fix polarity
     return hcat(df, DataFrame(polarity=polarity, pulse_idx=pulse_idx, I_FE=I_FE, Q_FE=Q_FE))
+end
+
+"""
+Validate TLM measurement dataframe for required columns and data quality
+
+Returns (is_valid, issues) where issues is a vector of warning strings
+"""
+function validate_tlm_dataframe(df::DataFrame, filepath::String="")
+    issues = String[]
+
+    # Check required columns
+    required_cols = ["current_source", "v_gnd"]
+    for col in required_cols
+        if !(col in names(df))
+            push!(issues, "Missing required column: $col")
+        end
+    end
+
+    if !isempty(issues)
+        return (false, issues)
+    end
+
+    # Check for empty data
+    if nrow(df) == 0
+        push!(issues, "Empty dataframe")
+        return (false, issues)
+    end
+
+    # Check for all-zero currents (would cause division by zero)
+    if all(df.current_source .== 0)
+        push!(issues, "All source currents are zero - cannot calculate resistance")
+    end
+
+    # Check for excessive NaN/missing values
+    nan_fraction = sum(ismissing.(df.current_source) .| isnan.(df.current_source)) / nrow(df)
+    if nan_fraction > 0.5
+        push!(issues, "More than 50% of current data is missing or NaN")
+    end
+
+    voltage_nan_fraction = sum(ismissing.(df.v_gnd) .| isnan.(df.v_gnd)) / nrow(df)
+    if voltage_nan_fraction > 0.5
+        push!(issues, "More than 50% of voltage data is missing or NaN")
+    end
+
+    return (isempty(issues), issues)
+end
+
+"""
+Calculate sheet resistance from TLM analysis data
+
+Given analyzed TLM data with length and resistance information,
+fits a linear relationship R = R_contact + R_sheet * L/W
+and returns (sheet_resistance_ohm_per_square, contact_resistance_ohm, r_squared)
+"""
+function calculate_sheet_resistance(analysis_df::DataFrame)
+    if nrow(analysis_df) == 0
+        @warn "Empty analysis dataframe for sheet resistance calculation"
+        return (NaN, NaN, NaN)
+    end
+
+    # Group by length and width to get average resistance per geometry
+    geometry_groups = combine(groupby(analysis_df, [:length_um, :width_um]),
+        :resistance_ohm => (x -> mean(filter(isfinite, x))) => :avg_resistance_ohm)
+
+    # Filter out invalid data
+    valid_mask = isfinite.(geometry_groups.avg_resistance_ohm) .&
+                 isfinite.(geometry_groups.length_um) .&
+                 isfinite.(geometry_groups.width_um) .&
+                 (geometry_groups.width_um .> 0)
+
+    valid_data = geometry_groups[valid_mask, :]
+
+    if nrow(valid_data) < 2
+        @warn "Need at least 2 valid geometry points for sheet resistance calculation"
+        return (NaN, NaN, NaN)
+    end
+
+    # Linear fit: R = R_contact + R_sheet * L/W
+    x = valid_data.length_um ./ valid_data.width_um  # L/W ratio
+    y = valid_data.avg_resistance_ohm
+
+    n = length(x)
+    sum_x = sum(x)
+    sum_y = sum(y)
+    sum_xy = sum(x .* y)
+    sum_x2 = sum(x .^ 2)
+
+    # Linear regression coefficients
+    denominator = n * sum_x2 - sum_x^2
+    if abs(denominator) < 1e-12
+        @warn "Cannot fit sheet resistance - insufficient variation in L/W ratios"
+        return (NaN, NaN, NaN)
+    end
+
+    sheet_resistance = (n * sum_xy - sum_x * sum_y) / denominator  # slope
+    contact_resistance = (sum_y - sheet_resistance * sum_x) / n     # intercept
+
+    # Calculate R-squared
+    y_pred = contact_resistance .+ sheet_resistance .* x
+    ss_res = sum((y .- y_pred) .^ 2)
+    ss_tot = sum((y .- mean(y)) .^ 2)
+    r_squared = 1 - ss_res / ss_tot
+
+    return (sheet_resistance, contact_resistance, r_squared)
+end
+
+"""
+Extract geometry information from device parameters
+
+Returns (length_um, width_um) or (NaN, NaN) if not found
+Expects device_params to contain :length_um and :width_um keys
+"""
+function extract_tlm_geometry_from_params(device_params::Dict{Symbol,Any}, filepath::String="")
+    length_um = get(device_params, :length_um, NaN)
+    width_um = get(device_params, :width_um, NaN)
+
+    # Try alternative key names
+    if isnan(length_um)
+        length_um = get(device_params, :length, NaN)
+    end
+    if isnan(width_um)
+        width_um = get(device_params, :width, NaN)
+    end
+
+    # If still not found, try fallback filename parsing
+    if isnan(length_um) || isnan(width_um)
+        @info "Geometry not found in device parameters, trying filename parsing for: $filepath"
+
+        # Remove path and extension
+        basename_file = basename(filepath)
+        name_part = replace(basename_file, r"\.(csv|txt)$" => "")
+
+        # Pattern to match TLML<length>W<width>
+        pattern = r"TLML(\d+)W(\d+)"
+        m = match(pattern, name_part)
+
+        if m !== nothing
+            length_um = parse(Float64, m.captures[1])
+            width_um = parse(Float64, m.captures[2])
+            @info "Extracted geometry from filename: L=$(length_um)μm, W=$(width_um)μm"
+        else
+            @warn "Could not extract geometry from device parameters or filename: $filepath" available_keys = keys(device_params)
+            return (NaN, NaN)
+        end
+    end
+
+    return (Float64(length_um), Float64(width_um))
+end
+
+"""
+Analyze multiple TLM measurements for combined plotting
+
+Takes a vector of (filepath, dataframe, device_params) tuples and returns a combined analysis DataFrame
+suitable for plotting width-normalized resistance vs length.
+
+device_params should contain :length_um and :width_um keys with geometry information.
+
+Returns DataFrame with columns:
+- filepath: original file path
+- length_um: extracted length in micrometers
+- width_um: extracted width in micrometers
+- resistance_ohm: calculated resistance (V/I at each current point)
+- resistance_normalized: resistance * width (Ω·μm)
+- current_source: source current values
+- voltage: measured voltage values
+"""
+function analyze_tlm_combined(files_data_params::Vector{Tuple{String,DataFrame,Dict{Symbol,Any}}}; Vmin=0.0002, Imin=1e-15)
+    if isempty(files_data_params)
+        @warn "No TLM data provided for combined analysis"
+        return DataFrame()
+    end
+
+    combined_data = DataFrame()
+    processed_files = 0
+
+    for (filepath, df, device_params) in files_data_params
+        # Validate the dataframe
+        is_valid, issues = validate_tlm_dataframe(df, filepath)
+        if !is_valid
+            @warn "Skipping invalid TLM file: $filepath" issues = issues
+            continue
+        end
+
+        if !isempty(issues)
+            @warn "TLM data quality issues in $filepath" issues = issues
+        end
+
+        # Extract geometry from device parameters
+        length_um, width_um = extract_tlm_geometry_from_params(device_params, filepath)
+
+        if isnan(length_um) || isnan(width_um) || length_um <= 0 || width_um <= 0
+            @warn "Skipping file with invalid geometry: $filepath (L=$length_um, W=$width_um)"
+            continue
+        end
+
+        # Calculate resistance from V/I, handling division by zero
+        resistance_ohm = similar(df.current_source, Float64)
+        for i in eachindex(df.current_source)
+            if abs(df.current_source[i]) < Imin  # Avoid division by very small numbers
+                resistance_ohm[i] = NaN
+            elseif abs(df.v_gnd[i]) < Vmin # avoid inaccurate values
+                resistance_ohm[i] = NaN
+            else
+                resistance_ohm[i] = df.v_gnd[i] / df.current_source[i]
+            end
+        end
+
+        # Width-normalize the resistance
+        resistance_normalized = resistance_ohm .* width_um
+
+        # Create a dataframe for this file
+        file_data = DataFrame(
+            filepath=fill(filepath, nrow(df)),
+            length_um=fill(length_um, nrow(df)),
+            width_um=fill(width_um, nrow(df)),
+            resistance_ohm=resistance_ohm,
+            resistance_normalized=resistance_normalized,
+            current_source=df.current_source,
+            voltage=df.v_gnd
+        )
+
+        # Add device name for plotting
+        device_name = "L$(Int(length_um))W$(Int(width_um))"
+        file_data.device_name = fill(device_name, nrow(df))
+
+        # Append to combined data
+        combined_data = vcat(combined_data, file_data)
+        processed_files += 1
+    end
+
+    if nrow(combined_data) == 0
+        @warn "No valid TLM data after processing all files" attempted_files = length(files_data_params)
+    else
+        @info "TLM combined analysis completed" n_files = processed_files n_total_files = length(files_data_params) n_points = nrow(combined_data)
+
+        # Calculate and report sheet resistance if we have enough data
+        sheet_res, contact_res, r_sq = calculate_sheet_resistance(combined_data)
+        if isfinite(sheet_res)
+            @info "Sheet resistance analysis" sheet_resistance_ohm_per_sq = sheet_res contact_resistance_ohm = contact_res r_squared = r_sq
+        end
+    end
+
+    return combined_data
 end
 
 end # module
