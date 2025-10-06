@@ -19,7 +19,7 @@ struct DeviceInfo
     parameters::Dict{Symbol,Any}          # device-level metadata
 end
 
-DeviceInfo(location::Vector{String}) = DeviceInfo(location, Dict{String,Any}())
+DeviceInfo(location::Vector{String}) = DeviceInfo(location, Dict{Symbol,Any}())
 
 # ---------------------------------------------------------------------------
 # Measurement related structs
@@ -28,10 +28,10 @@ struct MeasurementInfo
     filename::String
     filepath::String
     clean_title::String
-    measurement_type::String
+    measurement_kind::Symbol
     timestamp::Union{DateTime,Nothing}
     device_info::DeviceInfo
-    parameters::Dict{String,Any}
+    parameters::Dict{Symbol,Any}
     wakeup_pulse_count::Union{Int,Nothing}
 end
 
@@ -59,11 +59,11 @@ HierarchyNode(name::String, kind::Symbol) = HierarchyNode(name, kind, HierarchyN
 function MeasurementInfo(filepath::AbstractString)
     filename = basename(filepath)
     device_info = parse_device_info(filename)
-    measurement_type = parse_measurement_type(filename)
+    measurement_kind = detect_measurement_kind(filename)
     timestamp = parse_timestamp(filename)
     parameters = parse_parameters(filename)
     file_info = extract_file_info(filepath)
-    exp_label = measurement_type
+    exp_label = measurement_label(measurement_kind)
     device_label = (m = match(REGEX_DEVICE, filename)) !== nothing ? join(m.captures, "_") : ""
     date_str = let d = get(file_info, "test_date", "")
         isempty(d) && return ""
@@ -89,7 +89,7 @@ function MeasurementInfo(filepath::AbstractString)
 
     # Cache wakeup pulse count once (avoid per-frame I/O later)
     wakeup_count = nothing
-    if measurement_type == "Wakeup"
+    if measurement_kind == :wakeup
         try
             lines = readlines(filepath)
             data_start = 1
@@ -111,7 +111,7 @@ function MeasurementInfo(filepath::AbstractString)
         end
     end
 
-    return MeasurementInfo(filename, filepath, clean_title, measurement_type, timestamp, device_info, parameters, wakeup_count)
+    return MeasurementInfo(filename, filepath, clean_title, measurement_kind, timestamp, device_info, parameters, wakeup_count)
 end
 
 function extract_file_info(path::AbstractString)
@@ -162,21 +162,30 @@ function parse_device_info(filename::String)
     return DeviceInfo(["Unknown"])
 end
 
-function parse_measurement_type(filename::String)
-    filename_lower = lowercase(filename)
-    if contains(filename_lower, "fe pund") || contains(filename_lower, "fepund")
-        return "FE PUND"
-    elseif contains(filename_lower, "i_v sweep") || contains(filename_lower, "iv sweep")
-        return "I-V Sweep"
-    elseif contains(filename_lower, "tlm_4p") || contains(filename_lower, "tlm")
-        return "TLM 4-Point"
-    elseif contains(filename_lower, "break") || contains(filename_lower, "breakdown")
-        return "Breakdown"
-    elseif contains(filename_lower, "wakeup")
-        return "Wakeup"
+function detect_measurement_kind(filename::String)::Symbol
+    lower = lowercase(filename)
+    if occursin("fe pund", lower) || occursin("fepund", lower)
+        return :pund
+    elseif occursin("i_v sweep", lower) || occursin("iv sweep", lower)
+        return :iv
+    elseif occursin("tlm_4p", lower) || occursin("tlm", lower)
+        return :tlm4p
+    elseif occursin("break", lower) || occursin("breakdown", lower)
+        return :breakdown
+    elseif occursin("wakeup", lower)
+        return :wakeup
     else
-        return "Unknown"
+        return :unknown
     end
+end
+
+function measurement_label(kind::Symbol)::String
+    kind === :pund      && return "FE PUND"
+    kind === :iv        && return "I-V Sweep"
+    kind === :tlm4p     && return "TLM 4-Point"
+    kind === :breakdown && return "Breakdown"
+    kind === :wakeup    && return "Wakeup"
+    return "Unknown"
 end
 
 function parse_timestamp(filename::String)
@@ -192,50 +201,49 @@ function parse_timestamp(filename::String)
 end
 
 function parse_parameters(filename::String)
-    params = Dict{String,Any}()
+    params = Dict{Symbol,Any}()
     if (m = match(r"(\d+(?:\.\d+)?)V", filename)) !== nothing
-        params["voltage_V"] = parse(Float64, m.captures[1])
+        params[:voltage_V] = parse(Float64, m.captures[1])
     end
-    if (m = match(r"(\d+(?:\.\d+)?)(kHz|Hz)", lowercase(filename))) !== nothing
+    if (m = match(r"(\d+(?:\.\d+)?)(khz|hz)", lowercase(filename))) !== nothing
         val = parse(Float64, m.captures[1])
         unit = m.captures[2]
-        params["frequency_hz"] = unit == "khz" ? val * 1e3 : val
+        params[:frequency_Hz] = unit == "khz" ? val * 1e3 : val
     end
     if (m = match(r"\((\d+)\)", filename)) !== nothing
-        params["count"] = parse(Int, m.captures[1])
+        params[:count] = parse(Int, m.captures[1])
     end
     return params
 end
 
 function display_label(meas::MeasurementInfo)
-    if meas.measurement_type == "Wakeup"
+    label = measurement_label(meas.measurement_kind)
+    if meas.measurement_kind == :wakeup
         if meas.wakeup_pulse_count !== nothing && meas.wakeup_pulse_count > 0
-            return "$(meas.timestamp) $(meas.measurement_type) $(meas.wakeup_pulse_count)×"
+            return "$(meas.timestamp) $(label) $(meas.wakeup_pulse_count)×"
         end
-    elseif meas.measurement_type == "FE PUND"
+    elseif meas.measurement_kind == :pund
         try
             amplitude_match = match(r"(\d+(?:\.\d+)?)V", meas.filename)
             if amplitude_match !== nothing
                 voltage = parse(Float64, amplitude_match.captures[1])
                 voltage_str = voltage == floor(voltage) ? "$(Int(voltage))V" : "$(voltage)V"
-                return "$(meas.timestamp) $(meas.measurement_type) $(voltage_str)"
+                return "$(meas.timestamp) $(label) $(voltage_str)"
             end
         catch
             # ignore, fall through to default
         end
     end
-    return "$(meas.timestamp) $(meas.measurement_type)"
+    return "$(meas.timestamp) $(label)"
 end
 
-function meas_id(meas::MeasurementInfo)
-    return display_label(meas)
-end
+
 
 # ---------------------------------------------------------------------------
 # Multi-device (Breakdown) expansion
 # ---------------------------------------------------------------------------
 function expand_multi_device(meas::MeasurementInfo)::Vector{MeasurementInfo}
-    meas.measurement_type == "Breakdown" || return [meas]
+    meas.measurement_kind == :breakdown || return [meas]
     dev = last(meas.device_info.location)
     if (m = match(r"^([A-Z][1-9]+)([A-Z][1-9]+)$", dev)) === nothing
         return [meas]
@@ -246,7 +254,7 @@ function expand_multi_device(meas::MeasurementInfo)::Vector{MeasurementInfo}
         meas.filename,
         meas.filepath,
         replace(meas.clean_title, dev => p),
-        meas.measurement_type,
+        meas.measurement_kind,
         meas.timestamp,
         DeviceInfo(vcat(loc[1:end-1], [p]), deepcopy(meas.device_info.parameters)),
         deepcopy(meas.parameters),
@@ -393,7 +401,7 @@ function _infer_meta_value(s::AbstractString)
 end
 
 """
-    _load_device_info_txt(path) -> Dict{Tuple{Vararg{String}},Dict{String,Any}}
+    _load_device_info_txt(path) -> Dict{Tuple{Vararg{String}},Dict{Symbol,Any}}
 
 Reads device_info.txt where first column is `device_path` (slash-separated),
 remaining columns are arbitrary device-level parameters.
@@ -472,15 +480,15 @@ end
 Get statistics about a set of measurements.
 """
 function get_measurements_stats(measurements::Vector{MeasurementInfo})
-    stats = Dict{String,Any}()
-    stats["total_measurements"] = length(measurements)
-    stats["measurement_types"] = unique([m.measurement_type for m in measurements])
+    stats = Dict{Symbol,Any}()
+    stats[:total_measurements] = length(measurements)
+    stats[:measurement_types] = unique([measurement_label(m.measurement_kind) for m in measurements])
     timestamps = [m.timestamp for m in measurements if m.timestamp !== nothing]
     if !isempty(timestamps)
-        stats["first_measurement"] = minimum(timestamps)
-        stats["last_measurement"] = maximum(timestamps)
+        stats[:first_measurement] = minimum(timestamps)
+        stats[:last_measurement] = maximum(timestamps)
     end
-    all_params = Dict{String,Vector{Any}}()
+    all_params = Dict{Symbol,Vector{Any}}()
     for measurement in measurements
         for (key, value) in measurement.parameters
             if !haskey(all_params, key)
@@ -489,10 +497,10 @@ function get_measurements_stats(measurements::Vector{MeasurementInfo})
             push!(all_params[key], value)
         end
     end
-    stats["parameter_ranges"] = Dict{String,Any}()
+    stats[:parameter_ranges] = Dict{Symbol,Any}()
     for (param, values) in all_params
         if eltype(values) <: Number && !isempty(values)
-            stats["parameter_ranges"][param] = (minimum(values), maximum(values))
+            stats[:parameter_ranges][param] = (minimum(values), maximum(values))
         end
     end
     return stats

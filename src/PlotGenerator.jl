@@ -13,18 +13,17 @@ using .Analysis
 export figure_for_file
 
 """
-    figure_for_file(path::AbstractString) -> Union{Figure,Nothing}
+    figure_for_file(path::AbstractString; kind::Union{Symbol,Nothing}=nothing) -> Union{Figure,Nothing}
 
 Given a filepath to a measurement CSV, detect its measurement type
 from the filename alone (no MeasurementInfo dependency), load the data
 with the appropriate reader, and return a Makie Figure. Returns `nothing`
 if unsupported or loading/plotting fails.
 """
-function figure_for_file(path::AbstractString; kwargs...)
+function figure_for_file(path::AbstractString, kind::Union{Symbol,Nothing}; kwargs...)
     isfile(path) || return nothing
     fname = basename(path)
     dir = dirname(path)
-    lower = lowercase(fname)
 
     # Helper to derive a title (strip .csv)
     title = strip(replace(fname, r"\.csv$" => ""))
@@ -32,28 +31,30 @@ function figure_for_file(path::AbstractString; kwargs...)
     df = nothing
     fig = nothing
     try
-        if occursin("fe pund", lower) || occursin("fepund", lower)
+        if kind === :pund
             df = read_fe_pund(fname, dir)
             fig = plot_fe_pund(df, title; kwargs...)
-        elseif occursin("i_v sweep", lower) || occursin("iv sweep", lower)
+        elseif kind === :iv
             df = read_iv_sweep(fname, dir)
             fig = plot_iv_sweep_single(df, title; kwargs...)
-        elseif occursin("tlm_4p", lower) || occursin("tlm", lower)
+        elseif kind === :tlm4p
             df = read_tlm_4p(fname, dir)
             fig = plot_tlm_4p(df, title; kwargs...)
-        elseif occursin("break", lower) || occursin("breakdown", lower)
+        elseif kind === :breakdown
             # Treat as breakdown I-V for now
             df = read_iv_sweep(fname, dir)
             fig = plot_iv_sweep_single(df, title * " (Breakdown)"; kwargs...)
-        elseif occursin("wakeup", lower)
+        elseif kind === :wakeup
             df = read_wakeup(fname, dir)
             fig = plot_wakeup(df, title; kwargs...)
         else
             # Fallback attempt: try I-V sweep reader
             try
+                @warn "figure_for_file: Invalid measurement type. Attempting I-V sweep reader."
                 df = read_iv_sweep(fname, dir)
                 fig = plot_iv_sweep_single(df, title; kwargs...)
             catch
+                @warn "figure_for_file: Failed to plot."
                 return nothing
             end
         end
@@ -76,13 +77,7 @@ function plot_iv_sweep_single(df, title_str="I-V Sweep"; kwargs...)
     fig = Figure(size=(800, 600))
     ax = Axis(fig[1, 1], xlabel="Voltage (V)", ylabel="Current (A)", title=title_str)
 
-    vpos = df.v[df.i.>0]
-    vneg = df.v[df.i.<0]
-    ipos = df.i[df.i.>0]
-    ineg = df.i[df.i.<0]
-
-    lines!(ax, vpos, ipos, color=:blue, linewidth=2)
-    scatter!(ax, vneg, abs.(ineg), color=:red)
+    lines!(ax, df.v, abs.(df.i), color=df.i .> 0, colormap=:RdBu_3, linewidth=2)
 
     ax.yscale = log10
 

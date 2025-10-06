@@ -327,13 +327,13 @@ function _render_measurements_panel(ui_state, filter_meas)
         any_shown = false
         for m in meas_vec
             passes = !ig.ImGuiTextFilter_IsActive(filter_meas) ||
-                     ig.ImGuiTextFilter_PassFilter(filter_meas, meas_id(m), C_NULL) ||
+                     ig.ImGuiTextFilter_PassFilter(filter_meas, display_label(m), C_NULL) ||
                      ig.ImGuiTextFilter_PassFilter(filter_meas, m.clean_title, C_NULL) ||
-                     ig.ImGuiTextFilter_PassFilter(filter_meas, m.measurement_type, C_NULL)
+                     ig.ImGuiTextFilter_PassFilter(filter_meas, measurement_label(m.measurement_kind), C_NULL)
             passes || continue
             any_shown = true
             selected = get(ui_state, :selected_measurement, nothing) == m
-            if ig.Selectable(meas_id(m), selected)
+            if ig.Selectable(display_label(m), selected)
                 ui_state[:selected_measurement] = m
             end
             # Right-click context menu per measurement entry
@@ -378,14 +378,14 @@ function render_selection_window(ui_state)
 end
 
 # Unified helper: ensure (and cache) a Figure for a filepath with params
-function _ensure_plot_figure(ui_state, filepath; params...)
+function _ensure_plot_figure(ui_state, filepath; kind=nothing, params...)
     # Produce a fresh Figure every time this is called (caller controls call frequency).
     # Avoid caching and reusing the same Figure object across multiple ImGui/Makie
     # windows because sharing a single GLMakie.Figure/Screen texture in multiple
     # ImGui contexts can trigger crashes.
     isfile(filepath) || return nothing
     try
-        return figure_for_file(filepath; params...)
+        return figure_for_file(filepath, kind; params...)
     catch err
         @warn "figure_for_file failed" filepath error = err
         return nothing
@@ -400,7 +400,7 @@ function render_plot_window(ui_state)
         last_path = get(ui_state, :_last_plotted_path, nothing)
         last_mtime = get(ui_state, :_last_plotted_mtime, nothing)
         if filepath != last_path || mtime != last_mtime
-            fig = _ensure_plot_figure(ui_state, filepath; m.device_info.parameters...)
+            fig = _ensure_plot_figure(ui_state, filepath; kind=detect_measurement_kind(m.filename), m.device_info.parameters...)
             if fig !== nothing
                 ui_state[:plot_figure] = fig
                 ui_state[:_last_plotted_path] = filepath
@@ -449,16 +449,16 @@ function render_info_window(ui_state)
                     get_measurements_stats(meas_vec)
                 catch err
                     @warn "Failed to compute stats" error = err
-                    Dict{String,Any}()
+                    Dict{Symbol,Any}()
                 end
             end
             if !isempty(stats)
                 ig.Text("Stats")
-                ig.BulletText("Total: $(stats["total_measurements"])")
-                ig.BulletText("Types: $(join(stats["measurement_types"], ", "))")
-                if haskey(stats, "first_measurement")
-                    ig.BulletText("First: $(stats["first_measurement"]) ")
-                    ig.BulletText("Last:  $(stats["last_measurement"]) ")
+                ig.BulletText("Total: $(stats[:total_measurements])")
+                ig.BulletText("Types: $(join(stats[:measurement_types], ", "))")
+                if haskey(stats, :first_measurement)
+                    ig.BulletText("First: $(stats[:first_measurement]) ")
+                    ig.BulletText("Last:  $(stats[:last_measurement]) ")
                 end
             else
                 ig.TextDisabled("No stats available")
@@ -485,7 +485,7 @@ function render_info_window(ui_state)
             m = ui_state[:selected_measurement]
             ig.Text("Title: $(m.clean_title)")
             ig.Separator()
-            ig.BulletText("Type: $(m.measurement_type)")
+            ig.BulletText("Type: $(measurement_label(m.measurement_kind))")
             ig.BulletText("Timestamp: $(m.timestamp)")
             ig.BulletText("Filename:")
             ig.SameLine()
@@ -576,9 +576,10 @@ function render_additional_plot_windows(ui_state)
         existing_mtime = get(entry, :mtime, nothing)
         refresh = !haskey(entry, :figure) || existing_mtime != mtime
         if refresh
+            k = detect_measurement_kind(basename(filepath))
             fig = haskey(entry, :params) ?
-                  _ensure_plot_figure(ui_state, filepath; entry[:params]...) :
-                  _ensure_plot_figure(ui_state, filepath)
+                  _ensure_plot_figure(ui_state, filepath; kind=k, entry[:params]...) :
+                  _ensure_plot_figure(ui_state, filepath; kind=k)
             fig === nothing && continue
             entry[:figure] = fig
             entry[:mtime] = mtime

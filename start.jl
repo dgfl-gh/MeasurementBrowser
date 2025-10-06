@@ -2,7 +2,7 @@ using MeasurementBrowser
 
 # Get directory from command line or use default
 if length(ARGS) > 0
-    measurement_dir = ARGS[1]
+    measurement_dir = ARGS[end]
 else
     measurement_dir = "/home/dgfl/work/Borg/RuO2 processing/099_MeasData"
 end

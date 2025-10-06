@@ -108,7 +108,7 @@ using .PlotGenerator: plot_wakeup, figure_for_file
         @testset "MeasurementInfo Integration" begin
             meas_info = MeasurementInfo(wakeup_path)
 
-            @test meas_info.measurement_type == "Wakeup"
+            @test measurement_label(meas_info.measurement_kind) == "Wakeup"
 
             # Test that the clean title follows expected pattern (original format with device info)
             expected_title = "Wakeup A9_VI_D1 2025-10-01"
@@ -152,9 +152,9 @@ using .PlotGenerator: plot_wakeup, figure_for_file
         @test fig === nothing
 
         # Test measurement type detection
-        @test parse_measurement_type("Wakeup 5V test.csv") == "Wakeup"
-        @test parse_measurement_type("wakeup lowercase.csv") == "Wakeup"
-        @test parse_measurement_type("WAKEUP UPPERCASE.csv") == "Wakeup"
+        @test detect_measurement_kind("Wakeup 5V test.csv") == :wakeup
+        @test detect_measurement_kind("wakeup lowercase.csv") == :wakeup
+        @test detect_measurement_kind("WAKEUP UPPERCASE.csv") == :wakeup
     end
 
     @testset "GUI Display Verification" begin
@@ -162,7 +162,7 @@ using .PlotGenerator: plot_wakeup, figure_for_file
             meas_info = MeasurementInfo(wakeup_path)
 
             # Test that GUI shows pulse count while info panel shows original format
-            gui_display = meas_id(meas_info)  # What GUI actually shows
+            gui_display = display_label(meas_info)  # What GUI actually shows
             info_display = meas_info.clean_title  # What info panel shows
 
             @test gui_display == "2025-10-01T17:10:48 Wakeup 100×"  # GUI shows pulse count
@@ -177,7 +177,7 @@ using .PlotGenerator: plot_wakeup, figure_for_file
             pund_meas = MeasurementInfo(pund_path)
 
             # GUI display should include voltage for FE PUND files
-            gui_display = meas_id(pund_meas)
+            gui_display = display_label(pund_meas)
             @test gui_display == "2025-10-01T17:12:33 FE PUND 3V"
 
             # Info panel should show normal format (unchanged)
@@ -193,7 +193,7 @@ using .PlotGenerator: plot_wakeup, figure_for_file
             tlm_meas = MeasurementInfo(tlm_path)
 
             # GUI display should NOT have pulse count or voltage for TLM files
-            gui_display = meas_id(tlm_meas)
+            gui_display = display_label(tlm_meas)
             @test gui_display == "2025-10-01T16:21:45 TLM 4-Point"
 
             # Info panel should show normal format
