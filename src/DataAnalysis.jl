@@ -39,13 +39,18 @@ Perform PUND analysis on the DataFrame
 
 from this, Q_FE(V) or Q_FE(t) can be very easily extracted
 """
-function analyze_pund(df::DataFrame)
+function analyze_pund(df::DataFrame; DEBUG::Bool=false)
     @assert all(["time", "voltage", "current"] .∈ Ref(names(df))) "columns :time, :voltage, :current must exist"
     t, V, I = df[!, :time], df[!, :voltage], df[!, :current]
     N = length(t)
 
     # offset current data to zero
-    I .-= mean(skipmissing(filter(!isnan, I[1:75])))
+    n0 = min(10, N)
+    baseline_I = mean(skipmissing(filter(!isnan, I[1:n0])))
+    if DEBUG
+        @info "analyze_pund: baseline current offset" n0=n0 baseline=baseline_I
+    end
+    I .-= baseline_I
 
     # ---- helper: contiguous true–runs --------------------------------------------------
     function true_runs(mask::BitVector)

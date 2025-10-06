@@ -178,6 +178,22 @@ function render_menu_bar(ui_state)
                     ui_state[:show_performance_window] = false
                 end
             end
+            if ig.MenuItem("Debug Plot Mode", C_NULL, get(ui_state, :debug_plot_mode, false))
+                ui_state[:debug_plot_mode] = !get(ui_state, :debug_plot_mode, false)
+                # Invalidate cached figures when toggled
+                delete!(ui_state, :plot_figure)
+                delete!(ui_state, :_last_plotted_path)
+                delete!(ui_state, :_last_plotted_mtime)
+                # Invalidate additional plot windows
+                # (disabled for now since we want to print from the active figure only, usually)
+                # if haskey(ui_state, :open_plot_windows)
+                #     for entry in ui_state[:open_plot_windows]
+                #         if haskey(entry, :figure)
+                #             delete!(entry, :figure)
+                #         end
+                #     end
+                # end
+            end
             ig.EndMenu()
         end
         ig.EndMenuBar()
@@ -385,7 +401,10 @@ function _ensure_plot_figure(ui_state, filepath; kind=nothing, params...)
     # ImGui contexts can trigger crashes.
     isfile(filepath) || return nothing
     try
-        return figure_for_file(filepath, kind; params...)
+        if get(ui_state, :debug_plot_mode, false)
+            @info "Debug mode is ON: plots pass DEBUG flag."
+        end
+        return figure_for_file(filepath, kind; DEBUG=get(ui_state, :debug_plot_mode, false), params...)
     catch err
         @warn "figure_for_file failed" filepath error = err
         return nothing
@@ -413,6 +432,11 @@ function render_plot_window(ui_state)
         end
     end
     if ig.Begin("Plot Area")
+        if get(ui_state, :debug_plot_mode, false)
+            ig.TextColored((0.2, 0.8, 0.2, 1.0), "Debug Plot Mode")
+            ig.SameLine()
+            _helpmarker("Debug mode is ON: plots pass DEBUG flag.")
+        end
         if haskey(ui_state, :plot_figure)
             f = ui_state[:plot_figure]
             _time!(ui_state, :makie_fig) do

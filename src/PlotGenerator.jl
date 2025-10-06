@@ -156,7 +156,10 @@ end
 """
 Plot FE PUND data with comprehensive visualization
 """
-function plot_fe_pund(df, title_str="FE PUND"; area_um2=nothing, kwargs...)
+function plot_fe_pund(df, title_str="FE PUND"; area_um2=nothing, DEBUG::Bool=false, kwargs...)
+    if DEBUG
+        return debug_fe_pund(df, title_str; area_um2, DEBUG=DEBUG, kwargs...)
+    end
     if nrow(df) == 0
         return nothing
     end
@@ -210,6 +213,109 @@ function plot_fe_pund(df, title_str="FE PUND"; area_um2=nothing, kwargs...)
 
     return fig
 end
+
+function debug_fe_pund(df, title_str="FE PUND"; area_um2=nothing, DEBUG::Bool=false, kwargs...)
+    if nrow(df) == 0
+        return nothing
+    end
+
+    # Run analysis with optional debug logging inside analyze_pund
+    df = analyze_pund(df; DEBUG=DEBUG)
+
+    time_us = df.time * 1e6
+
+    # Debug view: emphasize time-domain only with very clear pulse boundaries
+    fig = Figure(size=(1200, 800))
+
+    # Time-domain I and V on shared x, dual y-axes
+    ax1 = Axis(fig[1, 1:2], xlabel="Time (μs)", ylabel="Current (μA)",
+        yticklabelcolor=:blue, title="$title_str - DEBUG (time domain)")
+    ax1twin = Axis(fig[1, 1:2], yaxisposition=:right, ylabel="Voltage (V)", yticklabelcolor=:red)
+
+    lI = lines!(ax1, time_us, df.current * 1e6, color=:blue, linewidth=2)
+    lIFE = lines!(ax1, time_us, df.I_FE * 1e6, color=:purple, linewidth=2)
+    lV = lines!(ax1twin, time_us, df.voltage, color=:red, linewidth=1, linestyle=:dash)
+
+    # Q_FE vs time (only non-NaN points present for P and N)
+    ax2 = Axis(fig[2, 1:2], xlabel="Time (μs)", ylabel="Switching Charge (pC)",
+        title="$title_str - Q_FE(t)")
+    lines!(ax2, time_us, df.Q_FE * 1e12, color=:orange, linewidth=2)
+
+    # Helper to draw vertical boundaries where pulse index changes
+    pid = df.pulse_idx
+    if length(pid) > 1
+        # Boundaries at any change in pulse_idx (including in/out of zero)
+        boundaries = [i for i in 2:length(pid) if pid[i] != pid[i-1]]
+        for b in boundaries
+            t = time_us[b]
+            if isfinite(t)
+                vlines!(ax1, t, color=:black, linestyle=:dot, linewidth=1, alpha=0.5)
+                vlines!(ax2, t, color=:black, linestyle=:dot, linewidth=1, alpha=0.5)
+            end
+        end
+
+        # Label segments with P/U/N/D/Poling labels at segment centers
+        function pulse_label(p::Int)
+            r = p % 5
+            r == 1 && return "Poling"
+            r == 2 && return "P"
+            r == 3 && return "U"
+            r == 4 && return "N"
+            r == 0 && return "D"
+            return ""
+        end
+        # Build contiguous segments of constant pulse_idx
+        segs = UnitRange{Int}[]
+        s = 1
+        for i in 2:length(pid)
+            if pid[i] != pid[i-1]
+                push!(segs, s:(i-1))
+                s = i
+            end
+        end
+        push!(segs, s:length(pid))
+        segs = [r for r in segs if pid[first(r)] > 0]  # only label actual pulses
+
+        # Place labels near the top of current axis and charge axis (robust to NaNs)
+        yI = df.current * 1e6
+        finite_yI = filter(isfinite, yI)
+        yImaxabs = isempty(finite_yI) ? 1.0 : maximum(abs.(finite_yI))
+        yImaxabs = isfinite(yImaxabs) ? yImaxabs : 1.0
+        yImin = isempty(finite_yI) ? -yImaxabs : minimum(finite_yI)
+        yImaxv = isempty(finite_yI) ?  yImaxabs : maximum(finite_yI)
+        if !(yImin < yImaxv)
+            yImin, yImaxv = -yImaxabs, yImaxabs
+        end
+
+        yQ = df.Q_FE * 1e12
+        finite_yQ = filter(isfinite, yQ)
+        yQmaxabs = isempty(finite_yQ) ? 1.0 : maximum(abs.(finite_yQ))
+        yQmaxabs = isfinite(yQmaxabs) ? yQmaxabs : 1.0
+        yQmin = isempty(finite_yQ) ? -yQmaxabs : minimum(finite_yQ)
+        yQmaxv = isempty(finite_yQ) ?  yQmaxabs : maximum(finite_yQ)
+        if !(yQmin < yQmaxv)
+            yQmin, yQmaxv = -yQmaxabs, yQmaxabs
+        end
+
+        ylims!(ax1, yImin - 0.1*yImaxabs, yImaxv + 0.3*yImaxabs)
+        ylims!(ax2, yQmin - 0.1*yQmaxabs, yQmaxv + 0.3*yQmaxabs)
+
+        for r in segs
+            tmid = (time_us[first(r)] + time_us[last(r)]) / 2
+            lab = pulse_label(pid[first(r)])
+            if !isempty(lab) && isfinite(tmid)
+                text!(ax1, tmid, yImaxv + 0.25*yImaxabs; text=lab, align=(:center, :baseline), color=:black)
+                text!(ax2, tmid, yQmaxv + 0.25*yQmaxabs; text=lab, align=(:center, :baseline), color=:black)
+            end
+        end
+    end
+
+    Legend(fig[1, 1], [lI, lV, lIFE], ["Current", "Voltage", "FE Current"],
+        tellwidth=false, tellheight=false, halign=:left, valign=:top)
+
+    return fig
+end
+
 
 
 """
