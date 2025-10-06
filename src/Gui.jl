@@ -230,7 +230,7 @@ function _render_hierarchy_tree_panel(ui_state, filter_tree)
         end
         devices
     end
-    handle_ctrl_a_selection!(ui_state, :selected_devices, get_all_devices_func, device_filter_func, filter_tree)
+    _handle_ctrl_a_selection!(ui_state, :selected_devices, get_all_devices_func, device_filter_func, filter_tree)
 
     meta_keys = get(ui_state, :device_metadata_keys, Symbol[])
 
@@ -289,7 +289,7 @@ function _render_hierarchy_tree_panel(ui_state, filter_tree)
                 selected_devices = get!(ui_state, :selected_devices, HierarchyNode[])
 
                 all_devices = get_all_devices(ui_state)
-                handle_multi_select!(selected_devices, node, all_devices, shift_held, ctrl_held)
+                _handle_multi_select!(selected_devices, node, all_devices, shift_held, ctrl_held)
                 ui_state[:selected_devices] = selected_devices
 
                 # Maintain backwards compatibility
@@ -361,13 +361,13 @@ end
 # Shared multi-select utility functions
 
 """
-    handle_multi_select!(selected_items, item, all_items, shift_held, ctrl_held)
+    _handle_multi_select!(selected_items, item, all_items, shift_held, ctrl_held)
 
 Common multi-select logic for both device and measurement panels.
 Handles range selection (Shift), toggle selection (Ctrl), and single selection.
 Modifies selected_items in place.
 """
-function handle_multi_select!(selected_items::Vector{T}, item::T, all_items::Vector{T}, shift_held::Bool, ctrl_held::Bool) where T
+function _handle_multi_select!(selected_items::Vector{T}, item::T, all_items::Vector{T}, shift_held::Bool, ctrl_held::Bool) where {T}
     if shift_held && !isempty(selected_items)
         # Range selection: select from last selected to current
         last_item = selected_items[end]
@@ -398,12 +398,12 @@ function handle_multi_select!(selected_items::Vector{T}, item::T, all_items::Vec
 end
 
 """
-    handle_ctrl_a_selection!(ui_state, state_key, all_items_func, filter_func, filter_obj)
+    _handle_ctrl_a_selection!(ui_state, state_key, all_items_func, filter_func, filter_obj)
 
 Handles Ctrl+A "select all visible" functionality for both device and measurement panels.
 Only selects items that pass the current filter. Updates ui_state[state_key] with filtered selection.
 """
-function handle_ctrl_a_selection!(ui_state, state_key::Symbol, all_items_func::Function, filter_func::Function, filter_obj)
+function _handle_ctrl_a_selection!(ui_state, state_key::Symbol, all_items_func::Function, filter_func::Function, filter_obj)
     if ig.IsKeyPressed(ig.ImGuiKey_A) && ig.IsWindowFocused()
         io = ig.GetIO()
         if unsafe_load(io.KeyCtrl)
@@ -452,14 +452,8 @@ end
 Counts how many items pass the current filter. Used for consistent status display
 across device and measurement panels. filter_func should return true for items that pass.
 """
-function count_filtered_items(items::Vector{T}, filter_obj, filter_func::Function) where T
-    count = 0
-    for item in items
-        if filter_func(item, filter_obj)
-            count += 1
-        end
-    end
-    return count
+function count_filtered_items(items::Vector{T}, filter_obj, filter_func::Function) where {T}
+    return count(item -> filter_func(item, filter_obj), items)
 end
 
 # Helper function to collect all leaf nodes (devices) from hierarchy
@@ -490,10 +484,6 @@ function get_device_path(target_device::HierarchyNode, current_node::HierarchyNo
     return nothing
 end
 
-# Helper function to get device name (just the device name, not full path)
-function get_device_name(device::HierarchyNode)
-    return device.name
-end
 
 # Helper function to get all devices for range selection
 function get_all_devices(ui_state)
@@ -529,9 +519,9 @@ function _render_measurements_panel(ui_state, filter_meas)
 
     measurement_filter_func = (m, filter_obj) -> begin
         !ig.ImGuiTextFilter_IsActive(filter_obj) ||
-        ig.ImGuiTextFilter_PassFilter(filter_obj, display_label(m), C_NULL) ||
-        ig.ImGuiTextFilter_PassFilter(filter_obj, m.clean_title, C_NULL) ||
-        ig.ImGuiTextFilter_PassFilter(filter_obj, measurement_label(m.measurement_kind), C_NULL)
+            ig.ImGuiTextFilter_PassFilter(filter_obj, display_label(m), C_NULL) ||
+            ig.ImGuiTextFilter_PassFilter(filter_obj, m.clean_title, C_NULL) ||
+            ig.ImGuiTextFilter_PassFilter(filter_obj, measurement_label(m.measurement_kind), C_NULL)
     end
     filtered_count = count_filtered_items(all_measurements, filter_meas, measurement_filter_func)
 
@@ -560,7 +550,7 @@ function _render_measurements_panel(ui_state, filter_meas)
         end
         candidate_measurements
     end
-    handle_ctrl_a_selection!(ui_state, :selected_measurements, get_all_measurements_func, measurement_filter_func, filter_meas)
+    _handle_ctrl_a_selection!(ui_state, :selected_measurements, get_all_measurements_func, measurement_filter_func, filter_meas)
 
 
     # Determine which measurements to show based on selected devices
@@ -576,7 +566,7 @@ function _render_measurements_panel(ui_state, filter_meas)
             meas_vec = device.measurements
         else
             # Multiple devices selected - show combined measurements
-            device_names = [get_device_name(d) for d in selected_devices]
+            device_names = [d.name for d in selected_devices]
             ig.Text("Measurements from $(length(selected_devices)) devices: $(join(device_names[1:min(3, end)], ", "))$(length(device_names) > 3 ? "..." : "")")
             ig.Separator()
             for device in selected_devices
@@ -610,7 +600,7 @@ function _render_measurements_panel(ui_state, filter_meas)
                 ctrl_held = unsafe_load(io.KeyCtrl)
 
                 # Use common multi-select logic
-                handle_multi_select!(selected_measurements, m, meas_vec, shift_held, ctrl_held)
+                _handle_multi_select!(selected_measurements, m, meas_vec, shift_held, ctrl_held)
                 ui_state[:selected_measurements] = selected_measurements
 
                 # Maintain backwards compatibility

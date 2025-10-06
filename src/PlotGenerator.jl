@@ -114,7 +114,7 @@ function plot_tlm_combined(paths::Vector{String}; device_params_list::Vector{Dic
     end
 
     # Load all TLM files
-    files_data_params = Tuple{String, DataFrame, Dict{Symbol,Any}}[]
+    files_data_params = Tuple{String,DataFrame,Dict{Symbol,Any}}[]
     for (i, path) in enumerate(paths)
         try
             filename = basename(path)
@@ -150,7 +150,7 @@ function plot_tlm_combined(paths::Vector{String}; device_params_list::Vector{Dic
     # Calculate sheet resistance
     sheet_res, contact_res, r_squared = calculate_sheet_resistance(analysis_df)
 
-    # Create the plot with two subplots
+    # Create the plot with three rows: main, residuals (shorter), and secondary+info
     fig = Figure(size=(900, 600))
 
     # Main plot: Resistance vs Length/Width
@@ -159,17 +159,29 @@ function plot_tlm_combined(paths::Vector{String}; device_params_list::Vector{Dic
         ylabel="Resistance (kΩ)",
         title="TLM Analysis - Sheet Resistance Extraction")
 
+    # Residuals plot (below main)
+    ax_res = Axis(fig[2, 1:2],
+        xlabel="Length/Width Ratio (L/W)",
+        ylabel="Residuals (kΩ)",
+        title="Residuals")
+    linkxaxes!(ax1, ax_res)
+
     # Secondary plot: Width-normalized resistance vs length
-    ax2 = Axis(fig[2, 1],
+    ax2 = Axis(fig[3, 1],
         xlabel="Length (μm)",
         ylabel="Width-Normalized Resistance (Ω·μm)",
         title="Width-Normalized Resistance vs Length")
 
     # Info panel
-    info_ax = Axis(fig[2, 2],
+    info_ax = Axis(fig[3, 2],
         xlabel="", ylabel="", title="Analysis Results")
     hidedecorations!(info_ax)
     hidespines!(info_ax)
+
+    # Make the residuals row shorter than the main plot
+    rowsize!(fig.layout, 1, Relative(0.55))
+    rowsize!(fig.layout, 2, Relative(0.20))
+    rowsize!(fig.layout, 3, Relative(0.25))
 
     # Group by device for plotting
     devices = unique(analysis_df.device_name)
@@ -177,12 +189,12 @@ function plot_tlm_combined(paths::Vector{String}; device_params_list::Vector{Dic
 
     # Plot 1: R vs L/W for sheet resistance extraction
     geometry_groups = combine(groupby(analysis_df, [:length_um, :width_um, :device_name]),
-                             :resistance_ohm => (x -> mean(filter(isfinite, x))) => :avg_resistance_ohm)
+        :resistance_ohm => (x -> mean(filter(isfinite, x))) => :avg_resistance_ohm)
 
     valid_geom_mask = isfinite.(geometry_groups.avg_resistance_ohm) .&
-                     isfinite.(geometry_groups.length_um) .&
-                     isfinite.(geometry_groups.width_um) .&
-                     (geometry_groups.width_um .> 0)
+                      isfinite.(geometry_groups.length_um) .&
+                      isfinite.(geometry_groups.width_um) .&
+                      (geometry_groups.width_um .> 0)
 
     valid_geometry = geometry_groups[valid_geom_mask, :]
 
@@ -194,8 +206,8 @@ function plot_tlm_combined(paths::Vector{String}; device_params_list::Vector{Dic
             device_geom = filter(row -> row.device_name == device, valid_geometry)
             if nrow(device_geom) > 0
                 device_lw = device_geom.length_um ./ device_geom.width_um
-                scatter!(ax1, device_lw, device_geom.avg_resistance_ohm./1e3,
-                        color=colors[i], label=device, markersize=10)
+                scatter!(ax1, device_lw, device_geom.avg_resistance_ohm ./ 1e3,
+                    color=colors[i], label=device, markersize=10)
             end
         end
 
@@ -203,24 +215,43 @@ function plot_tlm_combined(paths::Vector{String}; device_params_list::Vector{Dic
         if isfinite(sheet_res) && isfinite(contact_res)
             lw_range = extrema(lw_ratio)
             lw_fit = range(0, lw_range[2], length=100)
-            r_fit = (contact_res .+ sheet_res .* lw_fit)./1e3
+            r_fit = (contact_res .+ sheet_res .* lw_fit) ./ 1e3
             lines!(ax1, lw_fit, r_fit, color=:red, linewidth=2,
-                  label="Linear Fit", linestyle=:dash)
+                label="Linear Fit", linestyle=:dash)
         end
     end
 
-    # Plot 2: Width-normalized resistance vs length
+    # Residuals plot below main plot (red dots with blue vertical lines)
+    if nrow(valid_geometry) > 0 && isfinite(sheet_res) && isfinite(contact_res)
+        xvals = valid_geometry.length_um ./ valid_geometry.width_um
+        pred_ohm = contact_res .+ sheet_res .* xvals
+        resid_kohm = (valid_geometry.avg_resistance_ohm .- pred_ohm) ./ 1e3
+
+        # Zero reference line
+        xext = extrema(xvals)
+        lines!(ax_res, [xext[1], xext[2]], [0.0, 0.0], color=:black, linewidth=1, linestyle=:dot)
+
+        # Blue vertical lines from zero to each residual
+        for (x, r) in zip(xvals, resid_kohm)
+            lines!(ax_res, [x, x], [0.0, r], color=:blue, linewidth=1)
+        end
+
+        # Red dots at residual values
+        scatter!(ax_res, xvals, resid_kohm, color=:red, markersize=6)
+    end
+
+    # Plot 3: Width-normalized resistance vs length
     for (i, device) in enumerate(devices)
         device_data = filter(row -> row.device_name == device, analysis_df)
 
         # Filter out infinite and NaN values
         valid_mask = isfinite.(device_data.resistance_normalized) .&
-                    isfinite.(device_data.length_um)
+                     isfinite.(device_data.length_um)
 
         if sum(valid_mask) > 0
             valid_data = device_data[valid_mask, :]
             scatter!(ax2, valid_data.length_um, valid_data.resistance_normalized,
-                    color=colors[i], label=device, markersize=6)
+                color=colors[i], label=device, markersize=6)
         end
     end
 
@@ -242,7 +273,7 @@ function plot_tlm_combined(paths::Vector{String}; device_params_list::Vector{Dic
     results_text *= "Data points: $(nrow(analysis_df))"
 
     text!(info_ax, 0.05, 0.95, text=results_text,
-          align=(:left, :top), fontsize=16, space=:relative)
+        align=(:left, :top), fontsize=16, space=:relative)
 
     # Add legends
     if length(devices) > 1
@@ -503,7 +534,7 @@ function debug_fe_pund(df, title_str="FE PUND"; area_um2=nothing, DEBUG::Bool=fa
         yImaxabs = isempty(finite_yI) ? 1.0 : maximum(abs.(finite_yI))
         yImaxabs = isfinite(yImaxabs) ? yImaxabs : 1.0
         yImin = isempty(finite_yI) ? -yImaxabs : minimum(finite_yI)
-        yImaxv = isempty(finite_yI) ?  yImaxabs : maximum(finite_yI)
+        yImaxv = isempty(finite_yI) ? yImaxabs : maximum(finite_yI)
         if !(yImin < yImaxv)
             yImin, yImaxv = -yImaxabs, yImaxabs
         end
@@ -513,20 +544,20 @@ function debug_fe_pund(df, title_str="FE PUND"; area_um2=nothing, DEBUG::Bool=fa
         yQmaxabs = isempty(finite_yQ) ? 1.0 : maximum(abs.(finite_yQ))
         yQmaxabs = isfinite(yQmaxabs) ? yQmaxabs : 1.0
         yQmin = isempty(finite_yQ) ? -yQmaxabs : minimum(finite_yQ)
-        yQmaxv = isempty(finite_yQ) ?  yQmaxabs : maximum(finite_yQ)
+        yQmaxv = isempty(finite_yQ) ? yQmaxabs : maximum(finite_yQ)
         if !(yQmin < yQmaxv)
             yQmin, yQmaxv = -yQmaxabs, yQmaxabs
         end
 
-        ylims!(ax1, yImin - 0.1*yImaxabs, yImaxv + 0.3*yImaxabs)
-        ylims!(ax2, yQmin - 0.1*yQmaxabs, yQmaxv + 0.3*yQmaxabs)
+        ylims!(ax1, yImin - 0.1 * yImaxabs, yImaxv + 0.3 * yImaxabs)
+        ylims!(ax2, yQmin - 0.1 * yQmaxabs, yQmaxv + 0.3 * yQmaxabs)
 
         for r in segs
             tmid = (time_us[first(r)] + time_us[last(r)]) / 2
             lab = pulse_label(pid[first(r)])
             if !isempty(lab) && isfinite(tmid)
-                text!(ax1, tmid, yImaxv + 0.25*yImaxabs; text=lab, align=(:center, :baseline), color=:black)
-                text!(ax2, tmid, yQmaxv + 0.25*yQmaxabs; text=lab, align=(:center, :baseline), color=:black)
+                text!(ax1, tmid, yImaxv + 0.25 * yImaxabs; text=lab, align=(:center, :baseline), color=:black)
+                text!(ax2, tmid, yQmaxv + 0.25 * yQmaxabs; text=lab, align=(:center, :baseline), color=:black)
             end
         end
     end
