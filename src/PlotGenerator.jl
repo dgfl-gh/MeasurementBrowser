@@ -174,6 +174,7 @@ function plot_fe_pund(df, title_str="FE PUND"; area_um2=nothing, DEBUG::Bool=fal
     ax1twin = Axis(fig[1, 1:2], yaxisposition=:right, ylabel="Voltage (V)", yticklabelcolor=:red)
     ax2 = Axis(fig[2, 1], xlabel="Voltage (V)", ylabel="Current (μA)", title="$title_str - I-V Characteristic")
     ax3 = Axis(fig[2, 2], xlabel="Voltage (V)", ylabel="Switching Charge (pC)", title="$title_str - Ferroelectric Switching Charge")
+    linkxaxes!(ax1, ax1twin)
 
     # Combined I, V plot
     l1 = lines!(ax1, time_us, df.current * 1e6, color=:blue, linewidth=2)
@@ -231,6 +232,7 @@ function debug_fe_pund(df, title_str="FE PUND"; area_um2=nothing, DEBUG::Bool=fa
     ax1 = Axis(fig[1, 1:2], xlabel="Time (μs)", ylabel="Current (μA)",
         yticklabelcolor=:blue, title="$title_str - DEBUG (time domain)")
     ax1twin = Axis(fig[1, 1:2], yaxisposition=:right, ylabel="Voltage (V)", yticklabelcolor=:red)
+    linkxaxes!(ax1, ax1twin)
 
     lI = lines!(ax1, time_us, df.current * 1e6, color=:blue, linewidth=2)
     lIFE = lines!(ax1, time_us, df.I_FE * 1e6, color=:purple, linewidth=2)
