@@ -10,7 +10,7 @@ using .DataLoader: read_iv_sweep, read_fe_pund, read_tlm_4p, read_wakeup
 include("DataAnalysis.jl")
 using .Analysis
 
-export figure_for_file
+export figure_for_file, figure_for_files, plot_tlm_combined, plot_pund_fatigue
 
 """
     figure_for_file(path::AbstractString; kind::Union{Symbol,Nothing}=nothing) -> Union{Figure,Nothing}
@@ -62,6 +62,88 @@ function figure_for_file(path::AbstractString, kind::Union{Symbol,Nothing}; kwar
         @warn "figure_for_file failed" path error = err
         return nothing
     end
+
+    return fig
+end
+
+"""
+    figure_for_files(paths::Vector{String}, combined_kind::Symbol; kwargs...) -> Union{Figure,Nothing}
+
+Given a vector of filepaths to measurement CSVs and a combined plot type,
+load the data and return a combined Makie Figure. Returns `nothing`
+if unsupported or loading/plotting fails.
+"""
+function figure_for_files(paths::Vector{String}, combined_kind::Symbol; kwargs...)
+    isempty(paths) && return nothing
+
+    try
+        if combined_kind === :tlm_analysis
+            return plot_tlm_combined(paths; kwargs...)
+        elseif combined_kind === :pund_fatigue
+            return plot_pund_fatigue(paths; kwargs...)
+        else
+            @warn "figure_for_files: Unknown combined plot kind: $combined_kind"
+            return nothing
+        end
+    catch err
+        @warn "figure_for_files failed" paths combined_kind error = err
+        return nothing
+    end
+end
+
+"""
+Plot combined TLM analysis showing width-normalized resistance vs length
+"""
+function plot_tlm_combined(paths::Vector{String}; kwargs...)
+    @info "plot_tlm_combined called with $(length(paths)) files"
+
+    # TODO: Implement TLM combined analysis
+    # 1. Load all TLM files
+    # 2. Extract geometries from filenames (W2, W4, etc.)
+    # 3. Calculate width-normalized resistance
+    # 4. Create R vs L plot
+
+    # Placeholder implementation
+    fig = Figure(size=(800, 600))
+    ax = Axis(fig[1, 1],
+        xlabel="Length (μm)",
+        ylabel="Width-Normalized Resistance (Ω·μm)",
+        title="TLM Analysis - Combined Plot")
+
+    text!(ax, 0.5, 0.5, text="TLM Combined Plot\nNot Yet Implemented",
+        align=(:center, :center), fontsize=20, color=:red)
+
+    xlims!(ax, 0, 1)
+    ylims!(ax, 0, 1)
+
+    return fig
+end
+
+"""
+Plot PUND fatigue analysis showing either overlapped P-E curves or fatigue evolution
+"""
+function plot_pund_fatigue(paths::Vector{String}; mode=:overlapped, kwargs...)
+    @info "plot_pund_fatigue called with $(length(paths)) files, mode=$mode"
+
+    # TODO: Implement PUND fatigue analysis
+    # 1. Load all PUND files
+    # 2. Extract fatigue cycle numbers
+    # 3. Create either:
+    #    - :overlapped: P-E curves color-coded by cycle number
+    #    - :evolution: fatigue cycles vs remnant polarization
+
+    # Placeholder implementation
+    fig = Figure(size=(800, 600))
+    ax = Axis(fig[1, 1],
+        xlabel=mode === :overlapped ? "Voltage (V)" : "Fatigue Cycles",
+        ylabel=mode === :overlapped ? "Polarization (μC/cm²)" : "Remnant Polarization (μC/cm²)",
+        title="PUND Fatigue Analysis - $(mode) mode")
+
+    text!(ax, 0.5, 0.5, text="PUND Fatigue Plot\nMode: $mode\nNot Yet Implemented",
+        align=(:center, :center), fontsize=20, color=:red)
+
+    xlims!(ax, 0, 1)
+    ylims!(ax, 0, 1)
 
     return fig
 end
