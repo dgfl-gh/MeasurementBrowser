@@ -32,6 +32,7 @@ struct MeasurementInfo
     timestamp::Union{DateTime,Nothing}
     device_info::DeviceInfo
     parameters::Dict{String,Any}
+    wakeup_pulse_count::Union{Int,Nothing}
 end
 
 struct HierarchyNode
@@ -85,7 +86,32 @@ function MeasurementInfo(filepath::AbstractString)
     end
     parts = filter(!isempty, (exp_label == "Unknown" ? "" : exp_label, device_label, date_str))
     clean_title = isempty(parts) ? strip(replace(filename, r"\.csv$" => "")) : join(parts, " ")
-    return MeasurementInfo(filename, filepath, clean_title, measurement_type, timestamp, device_info, parameters)
+
+    # Cache wakeup pulse count once (avoid per-frame I/O later)
+    wakeup_count = nothing
+    if measurement_type == "Wakeup"
+        try
+            lines = readlines(filepath)
+            data_start = 1
+            for (i, line) in enumerate(lines)
+                if occursin("Time,MeasResult1_value,MeasResult2_value", line)
+                    data_start = i + 1
+                    break
+                end
+            end
+            cnt = 0
+            for line in lines[data_start:end]
+                if !isempty(strip(line)) && occursin(',', line)
+                    cnt += 1
+                end
+            end
+            wakeup_count = cnt
+        catch
+            # ignore, leave as nothing
+        end
+    end
+
+    return MeasurementInfo(filename, filepath, clean_title, measurement_type, timestamp, device_info, parameters, wakeup_count)
 end
 
 function extract_file_info(path::AbstractString)
@@ -181,33 +207,13 @@ function parse_parameters(filename::String)
     return params
 end
 
-function meas_id(meas::MeasurementInfo)
+function display_label(meas::MeasurementInfo)
     if meas.measurement_type == "Wakeup"
-        try
-            # Read wakeup file to get pulse count
-            lines = readlines(meas.filepath)
-            data_start = 1
-            for (i, line) in enumerate(lines)
-                if occursin("Time,MeasResult1_value,MeasResult2_value", line)
-                    data_start = i + 1
-                    break
-                end
-            end
-            data_lines = 0
-            for line in lines[data_start:end]
-                if !isempty(strip(line)) && occursin(',', line)
-                    data_lines += 1
-                end
-            end
-            if data_lines > 0
-                return "$(meas.timestamp) $(meas.measurement_type) $(data_lines)×"
-            end
-        catch
-            # If reading fails, fall back to default
+        if meas.wakeup_pulse_count !== nothing && meas.wakeup_pulse_count > 0
+            return "$(meas.timestamp) $(meas.measurement_type) $(meas.wakeup_pulse_count)×"
         end
     elseif meas.measurement_type == "FE PUND"
         try
-            # Extract voltage amplitude from filename
             amplitude_match = match(r"(\d+(?:\.\d+)?)V", meas.filename)
             if amplitude_match !== nothing
                 voltage = parse(Float64, amplitude_match.captures[1])
@@ -215,10 +221,14 @@ function meas_id(meas::MeasurementInfo)
                 return "$(meas.timestamp) $(meas.measurement_type) $(voltage_str)"
             end
         catch
-            # If reading fails, fall back to default
+            # ignore, fall through to default
         end
     end
     return "$(meas.timestamp) $(meas.measurement_type)"
+end
+
+function meas_id(meas::MeasurementInfo)
+    return display_label(meas)
 end
 
 # ---------------------------------------------------------------------------
@@ -240,6 +250,7 @@ function expand_multi_device(meas::MeasurementInfo)::Vector{MeasurementInfo}
         meas.timestamp,
         DeviceInfo(vcat(loc[1:end-1], [p]), deepcopy(meas.device_info.parameters)),
         deepcopy(meas.parameters),
+        meas.wakeup_pulse_count,
     ) for p in parts]
 end
 

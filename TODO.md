@@ -7,7 +7,7 @@ This document tracks prioritized bug fixes and architectural improvements. Prior
 
 ## P0 — Correctness and user-facing fixes
 
-- [ ] Use .txt consistently for device metadata file in the UI copy
+- [x] Use .txt consistently for device metadata file in the UI copy
   - Files:
     - `src/Gui.jl` (modal text currently says `device_info.csv`)
   - Decision: Keep `device_info.txt` (CSV-formatted text) as the canonical filename.
@@ -23,18 +23,13 @@ This document tracks prioritized bug fixes and architectural improvements. Prior
   - Change: Replace invalid `DateTime(typemax(Date).year)` with `DateTime(9999,12,31)` when `timestamp === nothing`.
   - Acceptance: Sorting works with files that lack timestamps.
 
-- [ ] Eliminate file I/O in `meas_id` during rendering
+- [x] Eliminate file I/O in `meas_id` during rendering
   - Files: `src/DeviceParser.jl`, `src/Gui.jl`
   - Change: Precompute display fields during scan:
     - Cache wakeup pulse count (int) from file read once in `scan_directory`
     - Cache PUND voltage (string) extracted from filename
     - Provide a stable, cached `display_label` (or reuse `meas_id` but backed by cached fields)
   - Acceptance: No file reads occur from inside per-frame rendering paths.
-
-- [ ] Make device metadata filename handling consistent
-  - Files: `src/DeviceParser.jl`, `src/Gui.jl`
-  - Keep loader checking `device_info.txt` (already implemented)
-  - Ensure all user-facing text and examples mention `device_info.txt` (not `.csv`).
 
 ## P1 — Architectural and performance work
 
